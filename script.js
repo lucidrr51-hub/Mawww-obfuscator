@@ -19,7 +19,7 @@ const copyLoadstringBtn = document.getElementById('copyLoadstringBtn');
 const openRawBtn = document.getElementById('openRawBtn');
 
 // ============================================================
-//  HEAVY LUA OBFUSCATOR — Multi-Layer Protection
+//  HEAVY LUA OBFUSCATOR — Multi-Layer Protection (FIXED)
 //  Compatible with ALL Roblox executors (Lua 5.1 / Luau)
 // ============================================================
 function obfuscateLua(source) {
@@ -41,7 +41,6 @@ function obfuscateLua(source) {
             bytes.push(0x80 | ((c >> 6) & 0x3F));
             bytes.push(0x80 | (c & 0x3F));
         } else {
-            // Surrogate pair
             i++;
             c = 0x10000 + (((c & 0x3FF) << 10) | (source.charCodeAt(i) & 0x3FF));
             bytes.push(0xF0 | (c >> 18));
@@ -66,7 +65,7 @@ function obfuscateLua(source) {
         v ^= keys[1][(i * 5 + 11) % 32];
         v ^= keys[2][(i * 17 + 23) % 32];
         v ^= keys[3][(i * 31 + 7) % 32];
-        return v;
+        return v & 0xFF;
     });
 
     // ─── Layer 4: Chunk splitting (anti-pattern) ───
@@ -91,7 +90,7 @@ function obfuscateLua(source) {
         chunks: rnd(), k1: rnd(), k2: rnd(), k3: rnd(), k4: rnd(),
         data: rnd(), arr: rnd(), i: rnd(), n: rnd(), out: rnd(),
         src: rnd(), fn: rnd(), ok: rnd(), err: rnd(), chk: rnd(),
-        expect: rnd()
+        expect: rnd(), num: rnd(), sep: rnd()
     };
 
     // ─── Layer 6: Integrity checksum ───
@@ -100,7 +99,6 @@ function obfuscateLua(source) {
         checksum = (checksum + b * 31 + 7) % 2147483647;
     }
 
-    // ─── Build Lua decoder ───
     const chunksLua = chunks.map(c => `    "${c}"`).join(',\n');
 
     const lua = `-- Mawww Obfuscator | Heavy Protection
@@ -152,14 +150,19 @@ local ${v.k2} = {${keys[1].join(',')}}
 local ${v.k3} = {${keys[2].join(',')}}
 local ${v.k4} = {${keys[3].join(',')}}
 
--- Reassemble
-local ${v.data} = ${v.concat}(${v.chunks})
+-- Reassemble with explicit comma separator (FIX)
+local ${v.sep}  = ","
+local ${v.data} = ${v.concat}(${v.chunks}, ${v.sep})
 
--- Parse byte array
+-- Parse byte array with validation
 local ${v.arr} = {}
 local ${v.i} = 1
-for ${v.n} in ${v.gmatch}(${v.data}, "([^,]+)") do
-    ${v.arr}[${v.i}] = ${v.tonumber}(${v.n}) or 0
+for ${v.num} in ${v.gmatch}(${v.data}, "([^,]+)") do
+    local ${v.n} = ${v.tonumber}(${v.num})
+    if not ${v.n} then
+        ${v.error}("Mawww: corrupt payload at position " .. ${v.tostring}(${v.i}))
+    end
+    ${v.arr}[${v.i}] = ${v.n}
     ${v.i} = ${v.i} + 1
 end
 
@@ -171,6 +174,7 @@ for ${v.i} = 1, #${v.arr} do
     ${v.n} = ${v.bxor}(${v.n}, ${v.k2}[ (((${v.i} - 1) * 5  + 11) % 32) + 1 ])
     ${v.n} = ${v.bxor}(${v.n}, ${v.k3}[ (((${v.i} - 1) * 17 + 23) % 32) + 1 ])
     ${v.n} = ${v.bxor}(${v.n}, ${v.k4}[ (((${v.i} - 1) * 31 + 7 ) % 32) + 1 ])
+    ${v.n} = ${v.n} % 256
     ${v.out}[${v.i}] = ${v.char}(${v.n})
 end
 
@@ -189,7 +193,7 @@ end
 -- Execute
 local ${v.fn}, ${v.err} = ${v.loadstring}(${v.src})
 if ${v.fn} then
-    ${v.ok} = ${v.pcall}(${v.fn})
+    local ${v.ok} = ${v.pcall}(${v.fn})
     if not ${v.ok} then
         ${v.error}("Mawww: " .. ${v.tostring}(${v.err}))
     end
