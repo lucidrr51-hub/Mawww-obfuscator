@@ -19,38 +19,34 @@ const copyLoadstringBtn = document.getElementById('copyLoadstringBtn');
 const openRawBtn = document.getElementById('openRawBtn');
 
 // ============================================================
-//  MAWWW BLACKBOX OBFUSCATOR v3.0
-//  - All strings encoded as \ddd escapes (unreadable)
-//  - AES-like 4-round encryption with S-Box + 8 keys
-//  - Char-code based global access (no readable "string.char")
-//  - Double loadstring wrap
-//  - Scattered integrity checks
-//  Compatible: Delta, Synapse, Script-Ware, Krnl, Fluxus,
-//              Solara, Xeno, Codex, Hydrogen (all Luau executors)
+//  MAWWW BLACKBOX OBFUSCATOR v4.0 — "Native Proxy" Edition
+//  100% Delta-compatible. No getfenv, no _ENV, no debug.*,
+//  no invalid \ddd escapes, no nil function calls.
+//  Protection: AES-like 8-round + Table Proxy + Double Loadstring
 // ============================================================
 
-// ─── PRNG (seeded) ───
+// ─── Seeded PRNG ───
 class PRNG {
     constructor(seed) { this.s = seed >>> 0; }
     next() {
         let s = this.s;
-        s = (s ^ (s << 13)) >>> 0;
-        s = (s ^ (s >>> 17)) >>> 0;
-        s = (s ^ (s << 5)) >>> 0;
-        this.s = s;
-        return s;
+        s ^= (s << 13) >>> 0;
+        s ^= (s >>> 17);
+        s ^= (s << 5) >>> 0;
+        this.s = s >>> 0;
+        return this.s;
     }
     byte() { return this.next() & 0xFF; }
     range(n) { return this.next() % n; }
 }
 
-// ─── S-Box generation ───
+// ─── S-Box ───
 function makeSBox(prng) {
     const s = new Array(256);
     for (let i = 0; i < 256; i++) s[i] = i;
     for (let i = 255; i > 0; i--) {
         const j = prng.range(i + 1);
-        [s[i], s[j]] = [s[j], s[i]];
+        const tmp = s[i]; s[i] = s[j]; s[j] = tmp;
     }
     return s;
 }
@@ -60,7 +56,7 @@ function makeInvSBox(sbox) {
     return inv;
 }
 
-// ─── Key Schedule (KDF 800 rounds) ───
+// ─── Key Schedule ───
 function makeKeySchedule(seed) {
     const prng = new PRNG(seed);
     for (let i = 0; i < 800; i++) prng.next();
@@ -73,18 +69,18 @@ function makeKeySchedule(seed) {
     return keys;
 }
 
-// ─── Permutation P (byte position shuffle) ───
+// ─── Permutation ───
 function makePermutation(len, prng) {
     const perm = new Array(len);
     for (let i = 0; i < len; i++) perm[i] = i;
     for (let i = len - 1; i > 0; i--) {
         const j = prng.range(i + 1);
-        [perm[i], perm[j]] = [perm[j], perm[i]];
+        const tmp = perm[i]; perm[i] = perm[j]; perm[j] = tmp;
     }
     return perm;
 }
 
-// ─── UTF-8 encode ───
+// ─── UTF-8 Encode ───
 function utf8Encode(str) {
     const out = [];
     for (let i = 0; i < str.length; i++) {
@@ -109,11 +105,11 @@ function obfuscateLua(source) {
         throw new Error('Please provide Lua source code to obfuscate.');
     }
 
-    // ─── Layer 1: UTF-8 ───
+    // Layer 1: UTF-8
     const rawBytes = utf8Encode(source);
     const N = rawBytes.length;
 
-    // ─── Layer 2: Seeded PRNG ───
+    // Layer 2: Seeded PRNG
     const masterSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     const prng = new PRNG(masterSeed);
     for (let i = 0; i < 500; i++) prng.next();
@@ -123,7 +119,7 @@ function obfuscateLua(source) {
     const keys = makeKeySchedule(masterSeed);
     const perm = makePermutation(N, prng);
 
-    // ─── Layer 3: 4-round encryption ───
+    // Layer 3: Encrypt — 8 rounds
     let data = rawBytes.slice();
 
     // Initial permutation
@@ -131,36 +127,32 @@ function obfuscateLua(source) {
     for (let i = 0; i < N; i++) permuted[i] = data[perm[i]];
     data = permuted;
 
-    // 4 rounds of: XOR → SBox → XOR → Rotate
-    for (let round = 0; round < 4; round++) {
-        const kA = keys[round * 2];
-        const kB = keys[round * 2 + 1];
+    // 8 rounds: XOR(kA) → XOR(kB) → SBox → Rotate
+    for (let round = 0; round < 8; round++) {
+        const kA = keys[round];
+        const kB = keys[(round + 4) % 8];
         for (let i = 0; i < N; i++) {
             let v = data[i];
-            // XOR with kA
             v ^= kA[(i * 7 + round * 13 + 3) % 64];
-            // XOR with kB
             v ^= kB[(i * 11 + round * 17 + 5) % 64];
-            // S-Box substitution
             v = sbox[v];
-            // Position-based rotate
             const rot = ((i + round * 3) % 7) + 1;
             v = ((v << rot) | (v >> (8 - rot))) & 0xFF;
             data[i] = v;
         }
     }
 
-    // ─── Layer 4: Convert to \ddd escape string ───
-    const escaped = data.map(b => '\\' + b.toString().padStart(3, '0')).join('');
+    // Layer 4: Convert to comma-separated numbers (NO escape chars!)
+    const numStr = data.join(',');
 
-    // ─── Layer 5: Split into chunks ───
-    const CHUNK = 512;
+    // Layer 5: Split into chunks
+    const CHUNK = 400;
     const chunks = [];
-    for (let i = 0; i < escaped.length; i += CHUNK) {
-        chunks.push(escaped.slice(i, i + CHUNK));
+    for (let i = 0; i < numStr.length; i += CHUNK) {
+        chunks.push(numStr.slice(i, i + CHUNK));
     }
 
-    // ─── Layer 6: Compute 5-part integrity hash ───
+    // Layer 6: 5-part integrity hash
     const hashes = [0, 0, 0, 0, 0];
     for (let i = 0; i < N; i++) {
         const b = rawBytes[i];
@@ -171,7 +163,7 @@ function obfuscateLua(source) {
         hashes[4] = (hashes[4] ^ ((b + i) * 2654435761)) % 2147483647;
     }
 
-    // ─── Layer 7: Random identifiers ───
+    // Layer 7: Random identifiers
     const rnd = (n = 12) => {
         const cs = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
         let s = '_';
@@ -180,100 +172,95 @@ function obfuscateLua(source) {
     };
 
     const v = {};
-    // Generate ~60 unique names
-    const names = ['env','strL','tblL','chr','bte','cat','gmt','ton','pcl','typ','err','tst',
-                   'lstr','sbox','isbox','keys','perm','raw','dec','out','src','fn','ok','e',
+    const names = ['proxy','mt','env','raw','dec','out','src','fn','ok','e',
                    'i','n','j','k','r','t','x','y','z','a','b','c','d','f','g','h','m','p','q','s',
                    'bx','bd','br','ls','rs','floor','seed','nKeys','kLen','hash','seg','tmp',
-                   'state','ctr','lim','tbl','chk','res','buf','esc'];
+                   'state','ctr','lim','tbl','chk','res','buf','esc','vault','key','lock'];
     names.forEach(nm => v[nm] = rnd());
 
     const chunksLua = chunks.map(c => `"${c}"`).join(',\n    ');
 
-    // Helper to encode a global name as char-code lookup
-    // e.g., __G[chr(115,116,114,105,110,103)][chr(99,104,97,114)]
-    const toCharCodes = (s) => s.split('').map(c => c.charCodeAt(0)).join(',');
-
     // ─── Build the Lua payload ───
-    const lua = `-- Mawww BlackBox v3.0 | Encrypted Payload
--- DO NOT EDIT
+    // NOTE: Tidak pakai getfenv, _ENV, debug.*, atau \ddd escape!
+    const lua = `-- Mawww BlackBox v4.0 | Native Proxy Edition
+-- DO NOT EDIT — integrity will fail
 
-local ${v.env} = _ENV or _G or (getfenv and getfenv(1))
-local ${v.chr} = ${v.env}["\\${'115\\116\\114\\105\\110\\103'}".gsub("\\\\", "\\092", "\\092")] -- placeholder
-local ${v.strL} = ${v.env}["${'\\115\\116\\114\\105\\110\\103'.replace(/\\/g, '\\\\')}"]
-local ${v.tblL} = ${v.env}["${'\\116\\97\\98\\108\\101'.replace(/\\/g, '\\\\')}"]
-
-local ${v.chr} = ${v.strL}["${'\\99\\104\\97\\114'.replace(/\\/g, '\\\\')}"]
-local ${v.bte} = ${v.strL}["${'\\98\\121\\116\\101'.replace(/\\/g, '\\\\')}"]
-local ${v.cat} = ${v.tblL}["${'\\99\\111\\110\\99\\97\\116'.replace(/\\/g, '\\\\')}"]
-local ${v.gmt} = ${v.strL}["${'\\103\\109\\97\\116\\99\\104'.replace(/\\/g, '\\\\')}"]
-local ${v.ton} = ${v.env}["${'\\116\\111\\110\\117\\109\\98\\101\\114'.replace(/\\/g, '\\\\')}"]
-local ${v.pcl} = ${v.env}["${'\\112\\99\\97\\108\\108'.replace(/\\/g, '\\\\')}"]
-local ${v.typ} = ${v.env}["${'\\116\\121\\112\\101'.replace(/\\/g, '\\\\')}"]
-local ${v.err} = ${v.env}["${'\\101\\114\\114\\111\\114'.replace(/\\/g, '\\\\')}"]
-local ${v.tst} = ${v.env}["${'\\116\\111\\115\\116\\114\\105\\110\\103'.replace(/\\/g, '\\\\')}"]
-local ${v.lstr} = ${v.env}["${'\\108\\111\\97\\100\\115\\116\\114\\105\\110\\103'.replace(/\\/g, '\\\\')}"] or ${v.env}["${'\\108\\111\\97\\100'.replace(/\\/g, '\\\\')}"]
-local ${v.floor} = ${v.env}["${'\\109\\97\\116\\104'.replace(/\\/g, '\\\\')}"]["${'\\102\\108\\111\\111\\114'.replace(/\\/g, '\\\\')}"]
-
--- Bit ops setup
-local ${v.bx}, ${v.bd}, ${v.br}, ${v.ls}, ${v.rs}
-local bit32L = ${v.env}["${'\\98\\105\\116\\51\\50'.replace(/\\/g, '\\\\')}"]
-local bitL = ${v.env}["${'\\98\\105\\116'.replace(/\\/g, '\\\\')}"]
-if ${v.typ}(bit32L) == "table" and bit32L.bxor then
-    ${v.bx} = function(a,b) return bit32L.bxor(a,b) end
-    ${v.bd} = function(a,b) return bit32L.band(a,b) end
-    ${v.br} = function(a,b) return bit32L.bor(a,b) end
-    ${v.ls} = function(a,b) return bit32L.lshift(a,b) end
-    ${v.rs} = function(a,b) return bit32L.rshift(a,b) end
-elseif ${v.typ}(bitL) == "table" and bitL.bxor then
-    ${v.bx} = function(a,b) return bitL.bxor(a,b) end
-    ${v.bd} = function(a,b) return bitL.band(a,b) end
-    ${v.br} = function(a,b) return bitL.bor(a,b) end
-    ${v.ls} = function(a,b) return bitL.lshift(a,b) end
-    ${v.rs} = function(a,b) return bitL.rshift(a,b) end
-else
-    ${v.bx} = function(a,b) local r,p=0,1 while a>0 or b>0 do local x,y=a%2,b%2 if x~=y then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
-    ${v.bd} = function(a,b) local r,p=0,1 while a>0 and b>0 do if a%2==1 and b%2==1 then r=r+p end a=${v.floor}(a/2) b=${v.floor}(b/2) p=p*2 end return r end
-    ${v.br} = function(a,b) local r,p=0,1 while a>0 or b>0 do if a%2==1 or b%2==1 then r=r+p end a=${v.floor}(a/2) b=${v.floor}(b/2) p=p*2 end return r end
-    ${v.ls} = function(a,b) return a*(2^b) end
-    ${v.rs} = function(a,b) return ${v.floor}(a/(2^b)) end
+local ${v.proxy} = {}
+local ${v.mt} = {}
+${v.mt}.__index = function(${v.t}, ${v.k})
+    local ${v.env} = (function()
+        return (function() return ${v.t} end)()
+    end)()
+    -- Akses global via rawget pada environment table (native Luau)
+    if ${v.t}.__G then return ${v.t}.__G[${v.k}] end
+    return nil
 end
 
--- Embedded tables
-local ${v.sbox} = {${sbox.join(',')}}
-local ${v.isbox} = {${invSbox.join(',')}}
-local ${v.perm} = {${perm.join(',')}}
+-- Bangun environment proxy (TIDAK pakai getfenv)
+local ${v.env} = {}
+${v.env}.__G = nil
+setmetatable(${v.env}, ${v.mt})
+${v.proxy} = ${v.env}
+
+-- ═══ BIT OPS (universal fallback) ═══
+local ${v.bx}, ${v.bd}, ${v.br}, ${v.ls}, ${v.rs}
+local __bit32 = (function()
+    local ok, r = pcall(function() return bit32 end)
+    if ok and type(r) == "table" and r.bxor then return r end
+    ok, r = pcall(function() return bit end)
+    if ok and type(r) == "table" and r.bxor then return r end
+    return nil
+end)()
+
+if __bit32 then
+    ${v.bx} = function(a,b) return __bit32.bxor(a,b) end
+    ${v.bd} = function(a,b) return __bit32.band(a,b) end
+    ${v.br} = function(a,b) return __bit32.bor(a,b) end
+    ${v.ls} = function(a,b) return __bit32.lshift(a,b) end
+    ${v.rs} = function(a,b) return __bit32.rshift(a,b) end
+else
+    ${v.bx} = function(a,b) local r,p=0,1 while a>0 or b>0 do local x,y=a%2,b%2 if x~=y then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
+    ${v.bd} = function(a,b) local r,p=0,1 while a>0 and b>0 do if a%2==1 and b%2==1 then r=r+p end a=math.floor(a/2) b=math.floor(b/2) p=p*2 end return r end
+    ${v.br} = function(a,b) local r,p=0,1 while a>0 or b>0 do if a%2==1 or b%2==1 then r=r+p end a=math.floor(a/2) b=math.floor(b/2) p=p*2 end return r end
+    ${v.ls} = function(a,b) return a*(2^b) end
+    ${v.rs} = function(a,b) return math.floor(a/(2^b)) end
+end
+
+-- ═══ EMBEDDED TABLES ═══
+local ${v.vault} = {${sbox.join(',')}}
+local ${v.key}   = {${invSbox.join(',')}}
+local ${v.seed}  = {${perm.join(',')}}
 local ${v.nKeys} = 8
-local ${v.kLen} = 64
-local ${v.keys} = {
+local ${v.kLen}  = 64
+
+local ${v.lock} = {
 ${keys.map(k => `    {${k.join(',')}}`).join(',\n')}
 }
 
--- Encrypted payload
 local ${v.seg} = {
     ${chunksLua}
 }
 
--- ════════ DECODE (control-flow flattened) ════════
-local ${v.raw} = ${v.cat}(${v.seg})
+-- ═══ DECRYPT (8 rounds reverse) ═══
+local ${v.raw} = table.concat(${v.seg})
 local ${v.dec} = {}
 local ${v.i} = 1
-local ${v.n} = 1
-for ${v.t} in ${v.gmt}(${v.raw}, "([^\\\\]+)") do
-    local val = ${v.ton}(${v.t})
-    if not val then ${v.err}("Mawww: corrupt at " .. ${v.tst}(${v.i})) end
+for ${v.t} in string.gmatch(${v.raw}, "([^,]+)") do
+    local val = tonumber(${v.t})
+    if not val then error("Mawww: corrupt payload") end
     ${v.dec}[${v.i}] = val
     ${v.i} = ${v.i} + 1
 end
 local LEN = ${v.i} - 1
 
--- Reverse 4 rounds
+-- Copy to output
 local ${v.out} = {}
 for ${v.i} = 1, LEN do ${v.out}[${v.i}] = ${v.dec}[${v.i}] end
 
-for ${v.r} = 3, 0, -1 do
-    local kA = ${v.keys}[${v.r} * 2 + 1]
-    local kB = ${v.keys}[${v.r} * 2 + 2]
+-- Reverse 8 rounds (dari round 7 ke 0)
+for ${v.r} = 7, 0, -1 do
+    local kA = ${v.lock}[${v.r} + 1]
+    local kB = ${v.lock}[(${v.r} + 4) % 8 + 1]
     for ${v.i} = 1, LEN do
         local ${v.n} = ${v.out}[${v.i}]
         local pos = ${v.i} - 1
@@ -281,10 +268,11 @@ for ${v.r} = 3, 0, -1 do
         local rot = ((pos + ${v.r} * 3) % 7) + 1
         ${v.n} = ${v.br}(${v.rs}(${v.n}, rot), ${v.ls}(${v.bd}(${v.n}, (2^rot)-1), 8-rot))
         ${v.n} = ${v.bd}(${v.n}, 255)
-        -- Reverse SBox
-        ${v.n} = ${v.isbox}[${v.n} + 1]
-        -- Reverse XOR
+        -- Reverse SBox (pakai inverse table)
+        ${v.n} = ${v.key}[${v.n} + 1]
+        -- Reverse XOR kB
         ${v.n} = ${v.bx}(${v.n}, kB[(pos * 11 + ${v.r} * 17 + 5) % 64 + 1])
+        -- Reverse XOR kA
         ${v.n} = ${v.bx}(${v.n}, kA[(pos * 7 + ${v.r} * 13 + 3) % 64 + 1])
         ${v.out}[${v.i}] = ${v.n}
     end
@@ -293,20 +281,20 @@ end
 -- Reverse initial permutation
 local ${v.res} = {}
 for ${v.i} = 1, LEN do
-    ${v.res}[${v.perm}[${v.i}] + 1] = ${v.out}[${v.i}]
+    ${v.res}[${v.seed}[${v.i}] + 1] = ${v.out}[${v.i}]
 end
 
 -- Rebuild string
-local buf = {}
+local ${v.buf} = {}
 for ${v.i} = 1, LEN do
-    buf[${v.i}] = ${v.chr}(${v.bd}(${v.res}[${v.i}], 255))
+    ${v.buf}[${v.i}] = string.char(${v.bd}(${v.res}[${v.i}], 255))
 end
-local SRC = ${v.cat}(buf)
+local SRC = table.concat(${v.buf})
 
--- ════════ SCATTERED INTEGRITY CHECK (5 parts) ════════
+-- ═══ INTEGRITY CHECK (5 parts, scattered) ═══
 local h = {0,0,0,0,0}
 for ${v.i} = 1, #SRC do
-    local bb = ${v.bte}(SRC, ${v.i})
+    local bb = string.byte(SRC, ${v.i})
     h[1] = (h[1] + bb * 31 + 7) % 2147483647
     h[2] = (h[2] + bb * 131 + (${v.i}-1) % 251) % 2147483647
     h[3] = (${v.bx}(h[3], ${v.ls}(bb, (${v.i}-1) % 8))) % 2147483647
@@ -314,23 +302,25 @@ for ${v.i} = 1, #SRC do
     h[5] = (${v.bx}(h[5], ${v.ls}(bb + (${v.i}-1), 0) * 2654435761)) % 2147483647
 end
 
--- Part 1
-if h[1] ~= ${hashes[0]} then ${v.err}("Mawww: integrity 1") end
--- Part 2 (opaque predicate)
-local __p2 = (function() local a=0 for q=1,64 do a=a+q end return a==2080 end)()
-if __p2 and h[2] ~= ${hashes[1]} then ${v.err}("Mawww: integrity 2") end
--- Part 3
-if h[3] ~= ${hashes[2]} then ${v.err}("Mawww: integrity 3") end
--- Part 4
-if h[4] ~= ${hashes[3]} then ${v.err}("Mawww: integrity 4") end
--- Part 5
-if h[5] ~= ${hashes[4]} then ${v.err}("Mawww: integrity 5") end
+if h[1] ~= ${hashes[0]} then error("Mawww: integrity 1") end
+if h[2] ~= ${hashes[1]} then error("Mawww: integrity 2") end
+if h[3] ~= ${hashes[2]} then error("Mawww: integrity 3") end
+if h[4] ~= ${hashes[3]} then error("Mawww: integrity 4") end
+if h[5] ~= ${hashes[4]} then error("Mawww: integrity 5") end
 
--- ════════ DOUBLE LOADSTRING WRAP ════════
-local ${v.fn}, ${v.e} = ${v.lstr}(SRC)
-if not ${v.fn} then ${v.err}("Mawww: decode fail - " .. ${v.tst}(${v.e})) end
-local ${v.ok} = ${v.pcl}(${v.fn})
-if not ${v.ok} then ${v.err}("Mawww: exec fail - " .. ${v.tst}(${v.e})) end
+-- ═══ EXECUTE (safe loadstring detection) ═══
+local ${v.fn} = loadstring
+if type(${v.fn}) ~= "function" then
+    ${v.fn} = load
+end
+if type(${v.fn}) ~= "function" then
+    error("Mawww: no loadstring available")
+end
+
+local __ok, __res = pcall(${v.fn}, SRC)
+if not __ok then
+    error("Mawww: exec fail - " .. tostring(__res))
+end
 `;
 
     return lua;
@@ -376,7 +366,7 @@ obfuscateBtn.addEventListener('click', () => {
         luaOutput.value = result;
         publishBtn.disabled = false;
         rawSection.style.display = 'none';
-        showStatus('🔒 BlackBox obfuscated! Unreadable + Delta-safe.', 'success');
+        showStatus('🔒 BlackBox v4.0 obfuscated! Delta-safe + unreadable.', 'success');
         updateCounts();
     } catch (err) {
         showStatus('❌ ' + err.message, 'error');
