@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mawww Obfuscator & Roblox Raw Publisher</title>
+    <meta name="description" content="Obfuscate Lua scripts and publish raw loadstrings for Roblox.">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="min-h-screen bg-grid">
+        <header class="header">
+            <div class="header-inner">
+                <div class="header-left">
+                    <div class="logo-icon glow-green">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="shield-icon">
+                            <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path>
+                        </svg>
+                    </div>
+                    <div class="header-title">
+                        <h1 class="brand-name">Mawww Obfuscator</h1>
+                        <p class="brand-subtitle">Roblox Raw Publisher</p>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <span class="guest-badge">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="zap-icon">
+                            <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path>
+                        </svg>
+                        Guest Mode
+                    </span>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Hero Section -->
+            <div class="hero-section">
+                <h2 class="hero-title">Obfuscate. Publish. Deploy.</h2>
+                <p class="hero-description">
+                    Transform Lua scripts into obfuscated code and publish them as raw loadstrings compatible with Roblox executors.
+                </p>
+            </div>
+
+            <!-- Input/Output Panels -->
+            <div class="panels-grid">
+                <!-- Input Panel -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <span class="panel-label">Input Lua</span>
+                        <button class="clear-btn" id="clearInputBtn">Clear</button>
+                    </div>
+                    <textarea id="luaInput" class="code-textarea" placeholder="Paste script here..." spellcheck="false"></textarea>
+                    <div class="panel-footer">
+                        <span class="char-count" id="inputCount">0 characters</span>
+                    </div>
+                </div>
+
+                <!-- Output Panel -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <span class="panel-label">Obfuscated Output</span>
+                        <button class="copy-btn" id="copyOutputBtn">Copy</button>
+                    </div>
+                    <textarea id="luaOutput" class="code-textarea" placeholder="Empty" readonly spellcheck="false"></textarea>
+                    <div class="panel-footer">
+                        <span class="char-count" id="outputCount">0 characters</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="actions-row">
+                <button class="btn btn-primary" id="obfuscateBtn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2v20M2 12h20"></path>
+                    </svg>
+                    Obfuscate
+                </button>
+                <button class="btn btn-secondary" id="publishBtn" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+                        <path d="M12 12v9"></path>
+                        <path d="m16 16-4-4-4 4"></path>
+                    </svg>
+                    Publish as Raw
+                </button>
+            </div>
+
+            <!-- Status Message -->
+            <div class="status-message" id="statusMessage"></div>
+        </main>
+
+        <footer class="footer">
+            <p>Mawww Obfuscator — For educational purposes only</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
