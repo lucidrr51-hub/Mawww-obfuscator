@@ -36,7 +36,6 @@
         </header>
 
         <main class="main-content">
-            <!-- Hero Section -->
             <div class="hero-section">
                 <h2 class="hero-title">Obfuscate. Publish. Deploy.</h2>
                 <p class="hero-description">
@@ -44,15 +43,33 @@
                 </p>
             </div>
 
-            <!-- Input/Output Panels -->
+            <!-- Hidden file input for upload -->
+            <input type="file" id="fileInput" accept=".lua,.txt,.luau" style="display:none;">
+
             <div class="panels-grid">
                 <!-- Input Panel -->
                 <div class="panel">
                     <div class="panel-header">
                         <span class="panel-label">Input Lua</span>
-                        <button class="clear-btn" id="clearInputBtn">Clear</button>
+                        <div class="panel-actions">
+                            <button class="icon-btn" id="uploadBtn" title="Upload .lua file">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                Upload
+                            </button>
+                            <button class="icon-btn" id="clearInputBtn">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 6h18"></path>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+                                </svg>
+                                Clear
+                            </button>
+                        </div>
                     </div>
-                    <textarea id="luaInput" class="code-textarea" placeholder="Paste script here..." spellcheck="false"></textarea>
+                    <textarea id="luaInput" class="code-textarea" placeholder="Paste script here or upload a .lua file..." spellcheck="false"></textarea>
                     <div class="panel-footer">
                         <span class="char-count" id="inputCount">0 characters</span>
                     </div>
@@ -62,7 +79,23 @@
                 <div class="panel">
                     <div class="panel-header">
                         <span class="panel-label">Obfuscated Output</span>
-                        <button class="copy-btn" id="copyOutputBtn">Copy</button>
+                        <div class="panel-actions">
+                            <button class="icon-btn" id="downloadBtn" title="Download obfuscated .lua">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
+                                Download
+                            </button>
+                            <button class="icon-btn" id="copyOutputBtn">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+                                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                                </svg>
+                                Copy
+                            </button>
+                        </div>
                     </div>
                     <textarea id="luaOutput" class="code-textarea" placeholder="Empty" readonly spellcheck="false"></textarea>
                     <div class="panel-footer">
@@ -89,8 +122,41 @@
                 </button>
             </div>
 
-            <!-- Status Message -->
+            <!-- Status -->
             <div class="status-message" id="statusMessage"></div>
+
+            <!-- Raw Loadstring Result -->
+            <div class="raw-section" id="rawSection" style="display:none;">
+                <div class="panel-header">
+                    <span class="panel-label">
+                        <span class="pulse-dot"></span>
+                        Raw Loadstring — Ready
+                    </span>
+                    <div class="panel-actions">
+                        <button class="icon-btn" id="copyLoadstringBtn">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+                                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                            </svg>
+                            Copy Loadstring
+                        </button>
+                        <button class="icon-btn" id="openRawBtn">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M15 3h6v6"></path>
+                                <path d="M10 14 21 3"></path>
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                            </svg>
+                            Open Raw
+                        </button>
+                    </div>
+                </div>
+                <div class="raw-output">
+                    <div class="raw-label">Raw URL (acak, auto-generated):</div>
+                    <div class="raw-url" id="rawUrlDisplay">—</div>
+                    <div class="raw-label">Loadstring (paste ini ke executor):</div>
+                    <textarea id="loadstringOutput" class="loadstring-textarea" readonly spellcheck="false"></textarea>
+                </div>
+            </div>
         </main>
 
         <footer class="footer">
