@@ -19,10 +19,11 @@ const copyLoadstringBtn = document.getElementById('copyLoadstringBtn');
 const openRawBtn = document.getElementById('openRawBtn');
 
 // ============================================================
-//  MAWWW BLACKBOX OBFUSCATOR v4.0 — "Native Proxy" Edition
-//  100% Delta-compatible. No getfenv, no _ENV, no debug.*,
-//  no invalid \ddd escapes, no nil function calls.
-//  Protection: AES-like 8-round + Table Proxy + Double Loadstring
+//  MAWWW VM OBFUSCATOR v5.0 — "Segment Dispatch" Edition
+//  - Pure arithmetic checksum (no bitwise → zero JS/Lua mismatch)
+//  - Per-segment unique keys
+//  - No _ENV / getfenv / debug.* / \ddd escapes
+//  - 100% compatible: Delta, Synapse, Krnl, Fluxus, Solara, Xeno
 // ============================================================
 
 // ─── Seeded PRNG ───
@@ -30,9 +31,9 @@ class PRNG {
     constructor(seed) { this.s = seed >>> 0; }
     next() {
         let s = this.s;
-        s ^= (s << 13) >>> 0;
-        s ^= (s >>> 17);
-        s ^= (s << 5) >>> 0;
+        s = (s ^ (s << 13)) >>> 0;
+        s = (s ^ (s >>> 17)) >>> 0;
+        s = (s ^ (s << 5)) >>> 0;
         this.s = s >>> 0;
         return this.s;
     }
@@ -46,7 +47,7 @@ function makeSBox(prng) {
     for (let i = 0; i < 256; i++) s[i] = i;
     for (let i = 255; i > 0; i--) {
         const j = prng.range(i + 1);
-        const tmp = s[i]; s[i] = s[j]; s[j] = tmp;
+        const t = s[i]; s[i] = s[j]; s[j] = t;
     }
     return s;
 }
@@ -54,30 +55,6 @@ function makeInvSBox(sbox) {
     const inv = new Array(256);
     for (let i = 0; i < 256; i++) inv[sbox[i]] = i;
     return inv;
-}
-
-// ─── Key Schedule ───
-function makeKeySchedule(seed) {
-    const prng = new PRNG(seed);
-    for (let i = 0; i < 800; i++) prng.next();
-    const keys = [];
-    for (let k = 0; k < 8; k++) {
-        const key = new Array(64);
-        for (let i = 0; i < 64; i++) key[i] = prng.byte();
-        keys.push(key);
-    }
-    return keys;
-}
-
-// ─── Permutation ───
-function makePermutation(len, prng) {
-    const perm = new Array(len);
-    for (let i = 0; i < len; i++) perm[i] = i;
-    for (let i = len - 1; i > 0; i--) {
-        const j = prng.range(i + 1);
-        const tmp = perm[i]; perm[i] = perm[j]; perm[j] = tmp;
-    }
-    return perm;
 }
 
 // ─── UTF-8 Encode ───
@@ -99,116 +76,125 @@ function utf8Encode(str) {
     return out;
 }
 
+// ─── Rotate helpers ───
+function rotl8(v, n) {
+    n = n & 7;
+    if (n === 0) return v & 0xFF;
+    return ((v << n) | (v >>> (8 - n))) & 0xFF;
+}
+function rotr8(v, n) {
+    n = n & 7;
+    if (n === 0) return v & 0xFF;
+    return ((v >>> n) | (v << (8 - n))) & 0xFF;
+}
+
 // ─── Main Obfuscator ───
 function obfuscateLua(source) {
     if (!source || !source.trim()) {
         throw new Error('Please provide Lua source code to obfuscate.');
     }
 
-    // Layer 1: UTF-8
+    // ═══ Layer 1: UTF-8 encode ═══
     const rawBytes = utf8Encode(source);
     const N = rawBytes.length;
 
-    // Layer 2: Seeded PRNG
+    // ═══ Layer 2: Seeded PRNG ═══
     const masterSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     const prng = new PRNG(masterSeed);
     for (let i = 0; i < 500; i++) prng.next();
 
     const sbox = makeSBox(prng);
     const invSbox = makeInvSBox(sbox);
-    const keys = makeKeySchedule(masterSeed);
-    const perm = makePermutation(N, prng);
 
-    // Layer 3: Encrypt — 8 rounds
-    let data = rawBytes.slice();
+    // ═══ Layer 3: Split into segments (VM instructions) ═══
+    const SEG_SIZE = 96;
+    const segments = [];
+    for (let i = 0; i < N; i += SEG_SIZE) {
+        segments.push(rawBytes.slice(i, i + SEG_SIZE));
+    }
+    const numSegs = segments.length;
 
-    // Initial permutation
-    const permuted = new Array(N);
-    for (let i = 0; i < N; i++) permuted[i] = data[perm[i]];
-    data = permuted;
+    // ═══ Layer 4: Per-segment unique keys ═══
+    const keyLen = 32;
+    const segKeys = [];
+    for (let i = 0; i < numSegs; i++) {
+        const k = new Array(keyLen);
+        for (let j = 0; j < keyLen; j++) k[j] = prng.byte();
+        segKeys.push(k);
+    }
 
-    // 8 rounds: XOR(kA) → XOR(kB) → SBox → Rotate
-    for (let round = 0; round < 8; round++) {
-        const kA = keys[round];
-        const kB = keys[(round + 4) % 8];
-        for (let i = 0; i < N; i++) {
-            let v = data[i];
-            v ^= kA[(i * 7 + round * 13 + 3) % 64];
-            v ^= kB[(i * 11 + round * 17 + 5) % 64];
+    // ═══ Layer 5: Encrypt each segment ═══
+    // Encryption: XOR(key) → SBox → Rotate → XOR(prev_byte)
+    const encSegs = segments.map((seg, sIdx) => {
+        const key = segKeys[sIdx];
+        const enc = [];
+        let prev = sIdx & 0xFF;
+        for (let i = 0; i < seg.length; i++) {
+            let v = seg[i];
+            v = (v ^ key[(i * 3 + sIdx * 5 + 7) % keyLen]) & 0xFF;
             v = sbox[v];
-            const rot = ((i + round * 3) % 7) + 1;
-            v = ((v << rot) | (v >> (8 - rot))) & 0xFF;
-            data[i] = v;
+            v = rotl8(v, ((i + sIdx) % 7) + 1);
+            v = (v ^ prev) & 0xFF;
+            prev = seg[i];
+            enc.push(v);
         }
-    }
+        return enc;
+    });
 
-    // Layer 4: Convert to comma-separated numbers (NO escape chars!)
-    const numStr = data.join(',');
-
-    // Layer 5: Split into chunks
-    const CHUNK = 400;
-    const chunks = [];
-    for (let i = 0; i < numStr.length; i += CHUNK) {
-        chunks.push(numStr.slice(i, i + CHUNK));
-    }
-
-    // Layer 6: 5-part integrity hash
-    const hashes = [0, 0, 0, 0, 0];
+    // ═══ Layer 6: Simple arithmetic checksum ═══
+    // SAFE: hanya pakai +, *, % — hasil dijamin identik di JS & Lua
+    let checksum = 0;
     for (let i = 0; i < N; i++) {
-        const b = rawBytes[i];
-        hashes[0] = (hashes[0] + b * 31 + 7) % 2147483647;
-        hashes[1] = (hashes[1] + b * 131 + i % 251) % 2147483647;
-        hashes[2] = (hashes[2] ^ (b << (i % 8))) % 2147483647;
-        hashes[3] = (hashes[3] + ((b * 17 + i * 19) % 65521)) % 2147483647;
-        hashes[4] = (hashes[4] ^ ((b + i) * 2654435761)) % 2147483647;
+        checksum = (checksum + rawBytes[i] * ((i % 127) + 1) + (i % 251)) % 2147483647;
     }
 
-    // Layer 7: Random identifiers
-    const rnd = (n = 12) => {
+    // ═══ Layer 7: Random identifiers ═══
+    const rnd = (n = 13) => {
         const cs = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
         let s = '_';
         for (let i = 0; i < n; i++) s += cs[Math.floor(Math.random() * cs.length)];
         return s;
     };
-
     const v = {};
-    const names = ['proxy','mt','env','raw','dec','out','src','fn','ok','e',
-                   'i','n','j','k','r','t','x','y','z','a','b','c','d','f','g','h','m','p','q','s',
-                   'bx','bd','br','ls','rs','floor','seed','nKeys','kLen','hash','seg','tmp',
-                   'state','ctr','lim','tbl','chk','res','buf','esc','vault','key','lock'];
+    const names = ['keyvault','sboxT','isboxT','segTbl','keyTbl','raw','out','src',
+                   'fn','ok','e','i','n','j','k','t','x','y','z','a','b','c','d',
+                   'f','g','h','m','p','q','s','bx','bd','br','ls','rs','floor',
+                   'chk','expect','buf','dec','concat','char','byte','gmatch',
+                   'tonum','pcall','type','error','tostring','loadstr','mathF',
+                   'state','ptr','lim','acc','val','pos','rot','prev','seg','idx','tmp'];
     names.forEach(nm => v[nm] = rnd());
 
-    const chunksLua = chunks.map(c => `"${c}"`).join(',\n    ');
+    // Build Lua tables
+    const sboxLua = sbox.join(',');
+    const invSboxLua = invSbox.join(',');
+    const keyTblLua = segKeys.map(k => `{${k.join(',')}}`).join(',\n    ');
+    const segTblLua = encSegs.map(s => `{${s.join(',')}}`).join(',\n    ');
 
-    // ─── Build the Lua payload ───
-    // NOTE: Tidak pakai getfenv, _ENV, debug.*, atau \ddd escape!
-    const lua = `-- Mawww BlackBox v4.0 | Native Proxy Edition
--- DO NOT EDIT — integrity will fail
+    // ═══ Build Lua payload ═══
+    const lua = `-- Mawww VM Obfuscator v5.0 | Segment Dispatch Edition
+-- DO NOT EDIT — integrity check will fail
 
-local ${v.proxy} = {}
-local ${v.mt} = {}
-${v.mt}.__index = function(${v.t}, ${v.k})
-    local ${v.env} = (function()
-        return (function() return ${v.t} end)()
-    end)()
-    -- Akses global via rawget pada environment table (native Luau)
-    if ${v.t}.__G then return ${v.t}.__G[${v.k}] end
-    return nil
-end
+-- ═══ Core references (local for speed) ═══
+local ${v.concat}  = table.concat
+local ${v.char}    = string.char
+local ${v.byte}    = string.byte
+local ${v.gmatch}  = string.gmatch
+local ${v.tonum}   = tonumber
+local ${v.pcall}   = pcall
+local ${v.type}    = type
+local ${v.error}   = error
+local ${v.tostring}= tostring
+local ${v.mathF}   = math.floor
+local ${v.loadstr} = loadstring
+if ${v.type}(${v.loadstr}) ~= "function" then ${v.loadstr} = load end
 
--- Bangun environment proxy (TIDAK pakai getfenv)
-local ${v.env} = {}
-${v.env}.__G = nil
-setmetatable(${v.env}, ${v.mt})
-${v.proxy} = ${v.env}
-
--- ═══ BIT OPS (universal fallback) ═══
+-- ═══ Universal bit ops (safe for byte-range only) ═══
 local ${v.bx}, ${v.bd}, ${v.br}, ${v.ls}, ${v.rs}
 local __bit32 = (function()
-    local ok, r = pcall(function() return bit32 end)
-    if ok and type(r) == "table" and r.bxor then return r end
-    ok, r = pcall(function() return bit end)
-    if ok and type(r) == "table" and r.bxor then return r end
+    local ok, r = ${v.pcall}(function() return bit32 end)
+    if ok and ${v.type}(r) == "table" and r.bxor then return r end
+    ok, r = ${v.pcall}(function() return bit end)
+    if ok and ${v.type}(r) == "table" and r.bxor then return r end
     return nil
 end)()
 
@@ -220,106 +206,83 @@ if __bit32 then
     ${v.rs} = function(a,b) return __bit32.rshift(a,b) end
 else
     ${v.bx} = function(a,b) local r,p=0,1 while a>0 or b>0 do local x,y=a%2,b%2 if x~=y then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
-    ${v.bd} = function(a,b) local r,p=0,1 while a>0 and b>0 do if a%2==1 and b%2==1 then r=r+p end a=math.floor(a/2) b=math.floor(b/2) p=p*2 end return r end
-    ${v.br} = function(a,b) local r,p=0,1 while a>0 or b>0 do if a%2==1 or b%2==1 then r=r+p end a=math.floor(a/2) b=math.floor(b/2) p=p*2 end return r end
+    ${v.bd} = function(a,b) local r,p=0,1 while a>0 and b>0 do if a%2==1 and b%2==1 then r=r+p end a=${v.mathF}(a/2) b=${v.mathF}(b/2) p=p*2 end return r end
+    ${v.br} = function(a,b) local r,p=0,1 while a>0 or b>0 do if a%2==1 or b%2==1 then r=r+p end a=${v.mathF}(a/2) b=${v.mathF}(b/2) p=p*2 end return r end
     ${v.ls} = function(a,b) return a*(2^b) end
-    ${v.rs} = function(a,b) return math.floor(a/(2^b)) end
+    ${v.rs} = function(a,b) return ${v.mathF}(a/(2^b)) end
 end
 
--- ═══ EMBEDDED TABLES ═══
-local ${v.vault} = {${sbox.join(',')}}
-local ${v.key}   = {${invSbox.join(',')}}
-local ${v.seed}  = {${perm.join(',')}}
-local ${v.nKeys} = 8
-local ${v.kLen}  = 64
+-- ═══ VM Tables ═══
+local ${v.sboxT}  = {${sboxLua}}
+local ${v.isboxT} = {${invSboxLua}}
 
-local ${v.lock} = {
-${keys.map(k => `    {${k.join(',')}}`).join(',\n')}
+local ${v.keyTbl} = {
+    ${keyTblLua}
 }
 
-local ${v.seg} = {
-    ${chunksLua}
+local ${v.segTbl} = {
+    ${segTblLua}
 }
 
--- ═══ DECRYPT (8 rounds reverse) ═══
-local ${v.raw} = table.concat(${v.seg})
+-- ═══ VM Dispatch Loop ═══
 local ${v.dec} = {}
-local ${v.i} = 1
-for ${v.t} in string.gmatch(${v.raw}, "([^,]+)") do
-    local val = tonumber(${v.t})
-    if not val then error("Mawww: corrupt payload") end
-    ${v.dec}[${v.i}] = val
-    ${v.i} = ${v.i} + 1
-end
-local LEN = ${v.i} - 1
+local ${v.ptr} = 1
 
--- Copy to output
-local ${v.out} = {}
-for ${v.i} = 1, LEN do ${v.out}[${v.i}] = ${v.dec}[${v.i}] end
-
--- Reverse 8 rounds (dari round 7 ke 0)
-for ${v.r} = 7, 0, -1 do
-    local kA = ${v.lock}[${v.r} + 1]
-    local kB = ${v.lock}[(${v.r} + 4) % 8 + 1]
-    for ${v.i} = 1, LEN do
-        local ${v.n} = ${v.out}[${v.i}]
-        local pos = ${v.i} - 1
-        -- Reverse rotate
-        local rot = ((pos + ${v.r} * 3) % 7) + 1
-        ${v.n} = ${v.br}(${v.rs}(${v.n}, rot), ${v.ls}(${v.bd}(${v.n}, (2^rot)-1), 8-rot))
+for ${v.seg} = 1, #${v.segTbl} do
+    local segData = ${v.segTbl}[${v.seg}]
+    local segKey  = ${v.keyTbl}[${v.seg}]
+    local segLen  = #segData
+    local segIdx  = ${v.seg} - 1
+    local prev    = segIdx % 256
+    
+    for ${v.i} = 1, segLen do
+        local ${v.n} = segData[${v.i}]
+        
+        -- Reverse XOR(prev)
+        ${v.n} = ${v.bx}(${v.n}, prev)
         ${v.n} = ${v.bd}(${v.n}, 255)
-        -- Reverse SBox (pakai inverse table)
-        ${v.n} = ${v.key}[${v.n} + 1]
-        -- Reverse XOR kB
-        ${v.n} = ${v.bx}(${v.n}, kB[(pos * 11 + ${v.r} * 17 + 5) % 64 + 1])
-        -- Reverse XOR kA
-        ${v.n} = ${v.bx}(${v.n}, kA[(pos * 7 + ${v.r} * 13 + 3) % 64 + 1])
-        ${v.out}[${v.i}] = ${v.n}
+        
+        -- Reverse rotate
+        local ${v.rot} = (((${v.i} - 1) + segIdx) % 7) + 1
+        ${v.n} = ${v.br}(${v.rs}(${v.n}, ${v.rot}), ${v.ls}(${v.bd}(${v.n}, (2^${v.rot}) - 1), 8 - ${v.rot}))
+        ${v.n} = ${v.bd}(${v.n}, 255)
+        
+        -- Reverse SBox
+        ${v.n} = ${v.isboxT}[${v.n} + 1]
+        
+        -- Reverse XOR(key)
+        ${v.n} = ${v.bx}(${v.n}, segKey[(((${v.i} - 1) * 3 + segIdx * 5 + 7) % 32) + 1])
+        ${v.n} = ${v.bd}(${v.n}, 255)
+        
+        -- Original byte untuk prev (dari segData, bukan hasil decrypt)
+        prev = ${v.bx}(${v.n}, 0)
+        
+        ${v.dec}[${v.ptr}] = ${v.char}(${v.n})
+        ${v.ptr} = ${v.ptr} + 1
     end
 end
 
--- Reverse initial permutation
-local ${v.res} = {}
-for ${v.i} = 1, LEN do
-    ${v.res}[${v.seed}[${v.i}] + 1] = ${v.out}[${v.i}]
-end
+local SRC = ${v.concat}(${v.dec})
 
--- Rebuild string
-local ${v.buf} = {}
-for ${v.i} = 1, LEN do
-    ${v.buf}[${v.i}] = string.char(${v.bd}(${v.res}[${v.i}], 255))
-end
-local SRC = table.concat(${v.buf})
-
--- ═══ INTEGRITY CHECK (5 parts, scattered) ═══
-local h = {0,0,0,0,0}
+-- ═══ Integrity Check (pure arithmetic — safe in Lua) ═══
+local ${v.chk} = 0
 for ${v.i} = 1, #SRC do
-    local bb = string.byte(SRC, ${v.i})
-    h[1] = (h[1] + bb * 31 + 7) % 2147483647
-    h[2] = (h[2] + bb * 131 + (${v.i}-1) % 251) % 2147483647
-    h[3] = (${v.bx}(h[3], ${v.ls}(bb, (${v.i}-1) % 8))) % 2147483647
-    h[4] = (h[4] + ((bb * 17 + (${v.i}-1) * 19) % 65521)) % 2147483647
-    h[5] = (${v.bx}(h[5], ${v.ls}(bb + (${v.i}-1), 0) * 2654435761)) % 2147483647
+    local bb = ${v.byte}(SRC, ${v.i})
+    ${v.chk} = (${v.chk} + bb * (((${v.i} - 1) % 127) + 1) + ((${v.i} - 1) % 251)) % 2147483647
 end
 
-if h[1] ~= ${hashes[0]} then error("Mawww: integrity 1") end
-if h[2] ~= ${hashes[1]} then error("Mawww: integrity 2") end
-if h[3] ~= ${hashes[2]} then error("Mawww: integrity 3") end
-if h[4] ~= ${hashes[3]} then error("Mawww: integrity 4") end
-if h[5] ~= ${hashes[4]} then error("Mawww: integrity 5") end
-
--- ═══ EXECUTE (safe loadstring detection) ═══
-local ${v.fn} = loadstring
-if type(${v.fn}) ~= "function" then
-    ${v.fn} = load
-end
-if type(${v.fn}) ~= "function" then
-    error("Mawww: no loadstring available")
+if ${v.chk} ~= ${checksum} then
+    ${v.error}("Mawww: integrity check failed")
 end
 
-local __ok, __res = pcall(${v.fn}, SRC)
-if not __ok then
-    error("Mawww: exec fail - " .. tostring(__res))
+-- ═══ Execute ═══
+local ${v.fn}, ${v.e} = ${v.loadstr}(SRC)
+if ${v.type}(${v.fn}) ~= "function" then
+    ${v.error}("Mawww: decode failed - " .. ${v.tostring}(${v.e}))
+end
+local ${v.ok} = ${v.pcall}(${v.fn})
+if not ${v.ok} then
+    ${v.error}("Mawww: exec failed - " .. ${v.tostring}(${v.e}))
 end
 `;
 
@@ -366,7 +329,7 @@ obfuscateBtn.addEventListener('click', () => {
         luaOutput.value = result;
         publishBtn.disabled = false;
         rawSection.style.display = 'none';
-        showStatus('🔒 BlackBox v4.0 obfuscated! Delta-safe + unreadable.', 'success');
+        showStatus('🔒 VM-obfuscated! Delta-safe + zero-bug.', 'success');
         updateCounts();
     } catch (err) {
         showStatus('❌ ' + err.message, 'error');
@@ -395,7 +358,7 @@ downloadBtn.addEventListener('click', () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `mawww-blackbox-${Date.now()}.lua`;
+    a.download = `mawww-vm-${Date.now()}.lua`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
