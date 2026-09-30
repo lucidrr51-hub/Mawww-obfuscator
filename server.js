@@ -22,7 +22,9 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // ---------- MIDDLEWARE ----------
 app.use(express.json({ limit: '20mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve static files from ROOT (bukan 'public')
+app.use(express.static(__dirname));
 
 const limiter = rateLimit({
     windowMs: 60 * 1000,
@@ -43,6 +45,11 @@ app.get('/health', (req, res) => {
         uptime: process.uptime(),
         queue: { pending: queue.pending, size: queue.size }
     });
+});
+
+// ---------- ROOT ROUTE ----------
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // ---------- CORE: run Prometheus ----------
@@ -95,7 +102,6 @@ do
     end
     if not _verify_env() then return end
 
-    -- anti-dumper source scan
     if debug and debug.getinfo then
         for lvl = 2, 15 do
             local ok, info = _pcall(debug.getinfo, lvl)
@@ -110,10 +116,8 @@ do
         end
     end
 
-    -- hooked loadstring detection
     if islclosure and loadstring and islclosure(loadstring) then return end
 
-    -- bad dumper globals
     local bad = {
         "ScriptDumper","ConstantDumper","BytecodeDumper","LuauDumper",
         "SimpleSpy","DarkDex","Hydroxide","TurtleSpy","DexOutput"
@@ -126,20 +130,18 @@ end
 `;
 }
 
-// ---------- WRAP: guard + encrypted constants + VM marker ----------
+// ---------- WRAP: guard + encrypted constants ----------
 function wrapOutput(luaCode, buildKey) {
     const guard = buildGuard();
     const keyHex = buildKey.toString('hex');
 
-    // Escape backticks / long-bracket safe wrapper
-    const body = luaCode.replace(/\]\]/g, '] ]');
+    // Encrypt the entire body as a base64 string
+    const encryptedBody = encryptString(luaCode, buildKey.readUInt32BE(0));
 
     return `${guard}
 -- Build key: ${keyHex}
 local __MAWWW_KEY = tonumber("${keyHex}", 16) or 0
-local __MAWWW_CHUNK = [==[
-${body}
-]==]
+local __MAWWW_CHUNK = [==[${encryptedBody}]==]
 local function __mawww_decrypt(s, k)
     local b = {}
     for i = 1, #s do
@@ -148,7 +150,8 @@ local function __mawww_decrypt(s, k)
     return table.concat(b)
 end
 local __mawww_loaded = loadstring or load
-__mawww_loaded(__MAWWW_CHUNK)()
+local __mawww_decoded = __mawww_decrypt(__MAWWW_CHUNK, __MAWWW_KEY % 256)
+__mawww_loaded(__mawww_decoded)()
 `;
 }
 
@@ -177,7 +180,7 @@ app.post('/api/obfuscate', async (req, res) => {
     try {
         fs.writeFileSync(inPath, code, 'utf8');
 
-        const buildKey = crypto.randomBytes(16); // per-build key
+        const buildKey = crypto.randomBytes(16);
 
         const result = await queue.add(async () => {
             await runPrometheus(inPath, outPath, chosen);
