@@ -24,7 +24,6 @@ function saveDB(db) {
 // ===== Middleware =====
 app.use(express.json({ limit: '20mb' }));
 
-// Static files dengan MIME type eksplisit
 app.use(express.static(path.join(__dirname), {
     index: 'index.html',
     setHeaders: (res, filePath) => {
@@ -39,7 +38,7 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // ============================================================
-//  MEGA VM WRAPPER — Layer 2 & 3
+//  MEGA VM WRAPPER — Delta-Safe Edition
 // ============================================================
 function utf8Encode(str) {
     const out = [];
@@ -175,14 +174,15 @@ function megaVmWrap(source) {
         'regs','count','size','segLen','segIdx','push','pop','halt','_nop','_nop2','_nop3',
         'x1','x2','x3','x4','x5','x6','x7','x8','x9','x10','y1','y2','y3','y4','y5','z1','z2',
         'q1','q2','q3','q4','q5','q6','w1','w2','w3','w4','w5','v1','v2','v3','v4','v5',
-        'masterSeed','sub','sub2','guard','safe','check','verify','seal','lock','key0'
+        'masterSeed','sub','sub2','guard','safe','check','verify','seal','lock','key0',
+        'candidates','genv','fenv','fn2','ok2','insert','ipairs'
     ];
     varNames.forEach(v => V[v] = nm(10, 16));
 
     const insStr = ins.map(row => `    {${row.join(',')}}`).join(',\n');
 
     const lua = `-- ═══════════════════════════════════════════════════════════
--- Mawww Ultra Obfuscator | Mega VM Protection v8.0
+-- Mawww Ultra Obfuscator | Mega VM Protection v8.1 (Delta-Safe)
 -- Layers: Mega VM + Random opcodes + Decoy instructions
 -- ═══════════════════════════════════════════════════════════
 -- Generated: ${new Date().toISOString()}
@@ -198,10 +198,43 @@ local ${V.type}=type
 local ${V.error}=error
 local ${V.tostring}=tostring
 local ${V.floor}=math.floor
-local ${V.loadstr}=loadstring
-if ${V.type}(${V.loadstr})~="function" then ${V.loadstr}=load end
 
--- Universal XOR
+-- ═══ Multi-layer loadstring detection (Delta-safe) ═══
+local ${V.loadstr}
+do
+    local ${V.candidates}={}
+    local ${V.ok},${V.genv}=${V.pcall}(function()
+        if getgenv then return getgenv() end
+        return nil
+    end)
+    if ${V.ok} and ${V.type}(${V.genv})=="table" and ${V.genv}.loadstring then
+        table.insert(${V.candidates}, ${V.genv}.loadstring)
+    end
+    
+    local ${V.ok2},${V.fenv}=${V.pcall}(function()
+        if getfenv then return getfenv() end
+        return nil
+    end)
+    if ${V.ok2} and ${V.type}(${V.fenv})=="table" and ${V.fenv}.loadstring then
+        table.insert(${V.candidates}, ${V.fenv}.loadstring)
+    end
+    
+    table.insert(${V.candidates}, loadstring)
+    table.insert(${V.candidates}, load)
+    
+    for ${V.i},${V.fn} in ipairs(${V.candidates}) do
+        if ${V.type}(${V.fn})=="function" then
+            ${V.loadstr}=${V.fn}
+            break
+        end
+    end
+    
+    if ${V.type}(${V.loadstr})~="function" then
+        ${V.error}("[Mawww] No loadstring/load function available")
+    end
+end
+
+-- ═══ Universal XOR ═══
 local ${V.bit}
 do
     local ${V.ok},${V.err}=${V.pcall}(function() return bit32 end)
@@ -235,17 +268,17 @@ else
     end
 end
 
--- S-Box tables
+-- ═══ S-Box tables ═══
 local ${V.sbox}={${sbox.join(',')}}
 local ${V.isbox}={${invSbox.join(',')}}
 
--- VM state
+-- ═══ VM state ═══
 local ${V.regs}={}
 local ${V.stack}={}
 local ${V.ptr}=0
 local ${V.buf}={}
 
--- Instruction handlers
+-- ═══ Instruction handlers ═══
 local function ${V.push}(${V.a},${V.b},${V.c})
     ${V.ptr}=${V.ptr}+1
     local ${V.val}=${V.x1}(${V.a},${V.b})%256
@@ -283,17 +316,38 @@ local function ${V.build}(${V.a},${V.b},${V.c})
 end
 
 local function ${V.exec}(${V.a},${V.b},${V.c})
-    local ${V.fn},${V.err}=${V.loadstr}(${V.buf})
-    if ${V.type}(${V.fn})~="function" then
-        ${V.error}("[Mawww VM] decode failed: "..${V.tostring}(${V.err}))
+    -- Validate buffer
+    if not ${V.buf} or #${V.buf}==0 then
+        ${V.error}("[Mawww VM] Empty buffer")
     end
+    
+    -- Try loadstring via pcall
+    local ${V.ok},${V.fn}=${V.pcall}(${V.loadstr},${V.buf})
+    
+    -- Fallback if pcall-wrapped call failed
+    if not ${V.ok} or ${V.type}(${V.fn})~="function" then
+        local ${V.ok2},${V.fn2}=${V.pcall}(function()
+            return ${V.loadstr}(${V.buf})
+        end)
+        if ${V.ok2} and ${V.type}(${V.fn2})=="function" then
+            ${V.fn}=${V.fn2}
+        else
+            ${V.error}("[Mawww VM] Decode failed: "..${V.tostring}(${V.fn}))
+        end
+    end
+    
+    if ${V.type}(${V.fn})~="function" then
+        ${V.error}("[Mawww VM] loadstring returned "..${V.type}(${V.fn}))
+    end
+    
+    -- Execute
     local ${V.ok},${V.err}=${V.pcall}(${V.fn})
     if not ${V.ok} then
-        ${V.error}("[Mawww VM] exec failed: "..${V.tostring}(${V.err}))
+        ${V.error}("[Mawww VM] Execution failed: "..${V.tostring}(${V.err}))
     end
 end
 
--- Dispatch table
+-- ═══ Dispatch table ═══
 local ${V.dispatch}={
     [${OPS.PUSH}]=${V.push},
     [${OPS.PUSH2}]=${V.push},
@@ -317,12 +371,12 @@ local ${V.dispatch}={
     [${OPS.HALT}]=${V.nop}
 }
 
--- Instruction table (${ins.length} entries)
+-- ═══ Instruction table (${ins.length} entries) ═══
 local ${V.code}={
 ${insStr}
 }
 
--- VM execution
+-- ═══ VM execution ═══
 local ${V.lim}=#${V.code}
 local ${V.idx}=1
 while ${V.idx}<=${V.lim} do
@@ -334,7 +388,7 @@ while ${V.idx}<=${V.lim} do
     ${V.idx}=${V.idx}+1
 end
 
--- Integrity check
+-- ═══ Integrity check ═══
 local ${V.chk}=0
 for ${V.i}=1,#${V.buf} do
     local ${V.bb}=${V.byte}(${V.buf},${V.i})
@@ -417,7 +471,7 @@ app.get('/api/stats', (req, res) => {
     res.json({ total: Object.keys(db).length });
 });
 
-// ===== SPA fallback (HANYA untuk route yang bukan file statis) =====
+// ===== SPA fallback =====
 app.get('*', (req, res) => {
     if (path.extname(req.path)) {
         return res.status(404).send('Not found');
@@ -427,5 +481,5 @@ app.get('*', (req, res) => {
 
 // ===== Listen on 0.0.0.0 for Railway =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v8.0 running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v8.1 (Delta-Safe) running on 0.0.0.0:${PORT}`);
 });
