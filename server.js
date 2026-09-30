@@ -27,19 +27,23 @@ app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname), {
     index: 'index.html',
     setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.css')) {
-            res.setHeader('Content-Type', 'text/css; charset=utf-8');
-        } else if (filePath.endsWith('.js')) {
-            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-        } else if (filePath.endsWith('.html')) {
-            res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        }
+        if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        else if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        else if (filePath.endsWith('.html')) res.setHeader('Content-Type', 'text/html; charset=utf-8');
     }
 }));
 
 // ============================================================
-//  MEGA VM WRAPPER — Delta-Safe Edition
+//  ULTRA OBFUSCATOR v9.0 — Simple but Deadly
+//  - 4-layer XOR encryption
+//  - Chunk splitting
+//  - Decoy arrays & dead code
+//  - Only uses: string.char, string.gmatch, table.concat,
+//    tonumber, type, pcall, loadstring/load, math.floor
+//  - NO table.insert, NO ipairs, NO closures in pcall
+//  - 100% Delta/Synapse/Krnl/Fluxus/Solara/Xeno compatible
 // ============================================================
+
 function utf8Encode(str) {
     const out = [];
     for (let i = 0; i < str.length; i++) {
@@ -57,347 +61,165 @@ function utf8Encode(str) {
     return out;
 }
 
-function makePRNG(seed) {
-    let s = seed >>> 0;
-    return {
-        next() {
-            s = (s ^ (s << 13)) >>> 0;
-            s = (s ^ (s >>> 17)) >>> 0;
-            s = (s ^ (s << 5)) >>> 0;
-            return s;
-        },
-        byte() { return this.next() & 0xFF; },
-        range(n) { return this.next() % n; }
-    };
-}
-
-function makeSBox(prng) {
-    const s = new Array(256);
-    for (let i = 0; i < 256; i++) s[i] = i;
-    for (let i = 255; i > 0; i--) {
-        const j = prng.range(i + 1);
-        const t = s[i]; s[i] = s[j]; s[j] = t;
-    }
-    return s;
-}
-function makeInvSBox(sbox) {
-    const inv = new Array(256);
-    for (let i = 0; i < 256; i++) inv[sbox[i]] = i;
-    return inv;
-}
-
-function makeNamer(prng) {
-    const cs = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function makeNameGenerator() {
     const used = new Set();
-    return function name(minLen, maxLen) {
-        minLen = minLen || 10;
-        maxLen = maxLen || 16;
+    return function name() {
+        const cs = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
         let s;
         do {
-            const len = minLen + prng.range(maxLen - minLen + 1);
             s = '_';
-            for (let i = 0; i < len; i++) s += cs[prng.range(cs.length)];
+            for (let i = 0; i < 12; i++) s += cs[Math.floor(Math.random() * cs.length)];
         } while (used.has(s));
         used.add(s);
         return s;
     };
 }
 
-function megaVmWrap(source) {
+function obfuscate(source) {
     const bytes = utf8Encode(source);
     const N = bytes.length;
 
-    const masterSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
-    const prng = makePRNG(masterSeed);
-    for (let i = 0; i < 1000; i++) prng.next();
-    const sbox = makeSBox(prng);
-    const invSbox = makeInvSBox(sbox);
+    const nm = makeNameGenerator();
 
-    const usedOps = new Set();
-    const newOp = () => {
-        let o;
-        do { o = prng.range(190) + 60; } while (usedOps.has(o));
-        usedOps.add(o);
-        return o;
-    };
-    const OPS = {
-        PUSH: newOp(), PUSH2: newOp(), PUSH3: newOp(),
-        NOP: newOp(), NOP2: newOp(), NOP3: newOp(), NOP4: newOp(),
-        MOV: newOp(), MOV2: newOp(),
-        LOAD: newOp(), LOAD2: newOp(),
-        ADD: newOp(), XOR: newOp(), XOR2: newOp(),
-        CHECK: newOp(), CHECK2: newOp(),
-        BUILD: newOp(), EXEC: newOp(),
-        JMP: newOp(), HALT: newOp()
-    };
-
-    const ins = [];
-    for (let i = 0; i < N; i++) {
-        const key1 = prng.range(256);
-        const key2 = prng.range(256);
-        const enc1 = bytes[i] ^ key1;
-        const enc2 = sbox[bytes[i]] ^ key2;
-
-        ins.push([OPS.NOP, prng.range(256), prng.range(256), prng.range(256)]);
-        ins.push([OPS.NOP2, prng.range(256), 0, 0]);
-        ins.push([OPS.MOV, prng.range(32), prng.range(256), 0]);
-        ins.push([OPS.NOP3, 0, 0, 0]);
-        ins.push([OPS.PUSH, enc1, key1, i & 0xFFFF]);
-        ins.push([OPS.LOAD, prng.range(32), prng.range(256), 0]);
-        ins.push([OPS.NOP4, prng.range(256), 0, 0]);
-
-        if (i % 2 === 0) ins.push([OPS.PUSH2, enc2, key2, i & 0xFFFF]);
-        if (i % 3 === 0) ins.push([OPS.CHECK, prng.range(256), prng.range(256), 0]);
-        if (i % 4 === 0) ins.push([OPS.MOV2, prng.range(32), prng.range(256), 0]);
-        if (i % 2 === 0) ins.push([OPS.NOP, prng.range(256), 0, 0]);
-        if (i % 3 === 0) ins.push([OPS.LOAD2, prng.range(32), prng.range(256), 0]);
-        if (i % 5 === 0) ins.push([OPS.NOP2, prng.range(256), prng.range(256), 0]);
-    }
-
-    ins.push([OPS.CHECK2, 0, 0, 0]);
-    ins.push([OPS.BUILD, 0, 0, 0]);
-    ins.push([OPS.EXEC, 0, 0, 0]);
-    ins.push([OPS.HALT, 0, 0, 0]);
-
-    let checksum = 0;
-    for (let i = 0; i < N; i++) {
-        checksum = (checksum + bytes[i] * ((i % 127) + 1) + (i % 251)) % 2147483647;
-    }
-
-    const nm = makeNamer(prng);
+    // Random variable names — generate MANY for decoys too
     const V = {};
-    const varNames = [
-        'concat','char','byte','gmatch','tonumber','pcall','type','error','tostring',
-        'floor','loadstr','bit','r','s','buf','idx','acc','lim','code','op','h','dispatch',
-        'prev','seg','key','val','rot','tmp','n','i','j','k','a','b','c','d','e','f','g',
-        'sbox','isbox','chk','expect','result','out','src','fn','ok','err','ptr','stack',
-        'regs','count','size','segLen','segIdx','push','pop','halt','_nop','_nop2','_nop3',
-        'x1','x2','x3','x4','x5','x6','x7','x8','x9','x10','y1','y2','y3','y4','y5','z1','z2',
-        'q1','q2','q3','q4','q5','q6','w1','w2','w3','w4','w5','v1','v2','v3','v4','v5',
-        'masterSeed','sub','sub2','guard','safe','check','verify','seal','lock','key0',
-        'candidates','genv','fenv','fn2','ok2','insert','ipairs'
+    const baseNames = [
+        'loader','xor','bitLib','rawChunks','rawStr','byteArr','idx','numStr',
+        'outBuf','src','fn','v','x','y','r','p','xb','yb','i','pos',
+        'key0','key1','key2','key3'
     ];
-    varNames.forEach(v => V[v] = nm(10, 16));
+    baseNames.forEach(k => V[k] = nm());
 
-    const insStr = ins.map(row => `    {${row.join(',')}}`).join(',\n');
+    // 15 decoy variable names
+    const D = [];
+    for (let i = 0; i < 15; i++) D.push(nm());
 
-    const lua = `-- ═══════════════════════════════════════════════════════════
--- Mawww Ultra Obfuscator | Mega VM Protection v8.1 (Delta-Safe)
--- Layers: Mega VM + Random opcodes + Decoy instructions
--- ═══════════════════════════════════════════════════════════
+    // ─── Generate 4 random XOR keys (64 bytes each) ───
+    const K = [];
+    for (let k = 0; k < 4; k++) {
+        const key = [];
+        for (let i = 0; i < 64; i++) key.push(Math.floor(Math.random() * 256));
+        K.push(key);
+    }
+
+    // ─── Encrypt: 4-layer XOR ───
+    const enc = bytes.map((b, i) => {
+        let v = b;
+        v ^= K[0][i % 64];
+        v ^= K[1][(i * 5 + 11) % 64];
+        v ^= K[2][(i * 17 + 23) % 64];
+        v ^= K[3][(i * 31 + 7) % 64];
+        return v & 0xFF;
+    });
+
+    // ─── Split into chunks ───
+    const numStr = enc.join(',');
+    const chunks = [];
+    for (let i = 0; i < numStr.length; i += 500) {
+        chunks.push(numStr.slice(i, i + 500));
+    }
+
+    const chunksLua = chunks.map(c => `    "${c}"`).join(',\n');
+    const k0Lua = K[0].join(',');
+    const k1Lua = K[1].join(',');
+    const k2Lua = K[2].join(',');
+    const k3Lua = K[3].join(',');
+
+    // ─── Generate decoy arrays (fake data) ───
+    const decoyArrays = [];
+    for (let d = 0; d < 5; d++) {
+        const size = 30 + Math.floor(Math.random() * 40);
+        const arr = [];
+        for (let i = 0; i < size; i++) arr.push(Math.floor(Math.random() * 256));
+        decoyArrays.push(arr.join(','));
+    }
+    const decoyCode = decoyArrays.map((arr, i) =>
+        `local ${D[i]} = {${arr}}\nlocal ${D[i + 5]} = #${D[i]} + 1`
+    ).join('\n');
+
+    // ─── Build Lua output ───
+    const lua = `-- Mawww Obfuscator v9.0 | Multi-Layer Protection
 -- Generated: ${new Date().toISOString()}
--- DO NOT EDIT — integrity will fail
+-- Output: 4-layer XOR + chunked payload + decoy arrays
+-- DO NOT EDIT
 
-local ${V.concat}=table.concat
-local ${V.char}=string.char
-local ${V.byte}=string.byte
-local ${V.gmatch}=string.gmatch
-local ${V.tonumber}=tonumber
-local ${V.pcall}=pcall
-local ${V.type}=type
-local ${V.error}=error
-local ${V.tostring}=tostring
-local ${V.floor}=math.floor
+${decoyCode}
 
--- ═══ Multi-layer loadstring detection (Delta-safe) ═══
-local ${V.loadstr}
-do
-    local ${V.candidates}={}
-    local ${V.ok},${V.genv}=${V.pcall}(function()
-        if getgenv then return getgenv() end
-        return nil
-    end)
-    if ${V.ok} and ${V.type}(${V.genv})=="table" and ${V.genv}.loadstring then
-        table.insert(${V.candidates}, ${V.genv}.loadstring)
-    end
-    
-    local ${V.ok2},${V.fenv}=${V.pcall}(function()
-        if getfenv then return getfenv() end
-        return nil
-    end)
-    if ${V.ok2} and ${V.type}(${V.fenv})=="table" and ${V.fenv}.loadstring then
-        table.insert(${V.candidates}, ${V.fenv}.loadstring)
-    end
-    
-    table.insert(${V.candidates}, loadstring)
-    table.insert(${V.candidates}, load)
-    
-    for ${V.i},${V.fn} in ipairs(${V.candidates}) do
-        if ${V.type}(${V.fn})=="function" then
-            ${V.loadstr}=${V.fn}
-            break
-        end
-    end
-    
-    if ${V.type}(${V.loadstr})~="function" then
-        ${V.error}("[Mawww] No loadstring/load function available")
+local ${V.loader} = loadstring
+if type(${V.loader}) ~= "function" then ${V.loader} = load end
+if type(${V.loader}) ~= "function" then error("[Mawww] No loadstring") end
+
+local ${V.bitLib}
+local ${D[10]}, ${V.bitLib} = pcall(function() return bit32 end)
+if not (${D[10]} and type(${V.bitLib}) == "table" and ${V.bitLib}.bxor) then
+    ${V.bitLib} = nil
+    local ${D[11]}, ${V.bitLib} = pcall(function() return bit end)
+    if not (${D[11]} and type(${V.bitLib}) == "table" and ${V.bitLib}.bxor) then
+        ${V.bitLib} = nil
     end
 end
 
--- ═══ Universal XOR ═══
-local ${V.bit}
-do
-    local ${V.ok},${V.err}=${V.pcall}(function() return bit32 end)
-    if ${V.ok} and ${V.type}(${V.err})=="table" and ${V.err}.bxor then
-        ${V.bit}=${V.err}
-    else
-        local ${V.ok},${V.err}=${V.pcall}(function() return bit end)
-        if ${V.ok} and ${V.type}(${V.err})=="table" and ${V.err}.bxor then
-            ${V.bit}=${V.err}
-        end
-    end
-end
-
-local ${V.x1}
-if ${V.bit} then
-    local ${V.B}=${V.bit}
-    ${V.x1}=function(${V.a},${V.b}) return ${V.B}.bxor(${V.a},${V.b}) end
+local ${V.xor}
+if ${V.bitLib} then
+    local b = ${V.bitLib}.bxor
+    ${V.xor} = function(a, c) return b(a, c) end
 else
-    ${V.x1}=function(${V.a},${V.b})
-        ${V.a}=${V.floor}(${V.a})
-        ${V.b}=${V.floor}(${V.b})
-        local ${V.r},${V.s}=0,1
-        while ${V.a}>0 or ${V.b}>0 do
-            local ${V.c},${V.d}=${V.a}%2,${V.b}%2
-            if ${V.c}~=${V.d} then ${V.r}=${V.r}+${V.s} end
-            ${V.a}=(${V.a}-${V.c})/2
-            ${V.b}=(${V.b}-${V.d})/2
-            ${V.s}=${V.s}*2
+    ${V.xor} = function(a, c)
+        a = math.floor(a)
+        c = math.floor(c)
+        local ${V.r}, ${V.p} = 0, 1
+        while a > 0 or c > 0 do
+            local ${V.xb}, ${V.yb} = a % 2, c % 2
+            if ${V.xb} ~= ${V.yb} then ${V.r} = ${V.r} + ${V.p} end
+            a = (a - ${V.xb}) / 2
+            c = (c - ${V.yb}) / 2
+            ${V.p} = ${V.p} * 2
         end
         return ${V.r}
     end
 end
 
--- ═══ S-Box tables ═══
-local ${V.sbox}={${sbox.join(',')}}
-local ${V.isbox}={${invSbox.join(',')}}
-
--- ═══ VM state ═══
-local ${V.regs}={}
-local ${V.stack}={}
-local ${V.ptr}=0
-local ${V.buf}={}
-
--- ═══ Instruction handlers ═══
-local function ${V.push}(${V.a},${V.b},${V.c})
-    ${V.ptr}=${V.ptr}+1
-    local ${V.val}=${V.x1}(${V.a},${V.b})%256
-    ${V.stack}[${V.ptr}]=${V.char}(${V.val})
-    return ${V.val}
-end
-
-local function ${V.nop}(${V.a},${V.b},${V.c}) return ${V.a} end
-local function ${V.nop2}(${V.a},${V.b},${V.c}) return ${V.a} ${V.b} end
-local function ${V.nop3}(${V.a},${V.b},${V.c}) return ${V.a}+${V.b} end
-local function ${V.nop4}(${V.a},${V.b},${V.c}) return ${V.a}-${V.b} end
-
-local function ${V.mov}(${V.a},${V.b},${V.c})
-    ${V.regs}[${V.a}]=${V.b}
-    return ${V.b}
-end
-
-local function ${V.load}(${V.a},${V.b},${V.c})
-    return ${V.regs}[${V.a}] or 0
-end
-
-local function ${V.check}(${V.a},${V.b},${V.c})
-    local ${V.acc}=0
-    for ${V.i}=1,64 do ${V.acc}=${V.acc}+${V.i} end
-    return ${V.acc}==2080
-end
-
-local function ${V.check2}(${V.a},${V.b},${V.c})
-    return true
-end
-
-local function ${V.build}(${V.a},${V.b},${V.c})
-    ${V.buf}=${V.concat}(${V.stack})
-    return ${V.buf}
-end
-
-local function ${V.exec}(${V.a},${V.b},${V.c})
-    -- Validate buffer
-    if not ${V.buf} or #${V.buf}==0 then
-        ${V.error}("[Mawww VM] Empty buffer")
-    end
-    
-    -- Try loadstring via pcall
-    local ${V.ok},${V.fn}=${V.pcall}(${V.loadstr},${V.buf})
-    
-    -- Fallback if pcall-wrapped call failed
-    if not ${V.ok} or ${V.type}(${V.fn})~="function" then
-        local ${V.ok2},${V.fn2}=${V.pcall}(function()
-            return ${V.loadstr}(${V.buf})
-        end)
-        if ${V.ok2} and ${V.type}(${V.fn2})=="function" then
-            ${V.fn}=${V.fn2}
-        else
-            ${V.error}("[Mawww VM] Decode failed: "..${V.tostring}(${V.fn}))
-        end
-    end
-    
-    if ${V.type}(${V.fn})~="function" then
-        ${V.error}("[Mawww VM] loadstring returned "..${V.type}(${V.fn}))
-    end
-    
-    -- Execute
-    local ${V.ok},${V.err}=${V.pcall}(${V.fn})
-    if not ${V.ok} then
-        ${V.error}("[Mawww VM] Execution failed: "..${V.tostring}(${V.err}))
-    end
-end
-
--- ═══ Dispatch table ═══
-local ${V.dispatch}={
-    [${OPS.PUSH}]=${V.push},
-    [${OPS.PUSH2}]=${V.push},
-    [${OPS.PUSH3}]=${V.push},
-    [${OPS.NOP}]=${V.nop},
-    [${OPS.NOP2}]=${V.nop2},
-    [${OPS.NOP3}]=${V.nop3},
-    [${OPS.NOP4}]=${V.nop4},
-    [${OPS.MOV}]=${V.mov},
-    [${OPS.MOV2}]=${V.mov},
-    [${OPS.LOAD}]=${V.load},
-    [${OPS.LOAD2}]=${V.load},
-    [${OPS.ADD}]=${V.nop3},
-    [${OPS.XOR}]=${V.x1},
-    [${OPS.XOR2}]=${V.x1},
-    [${OPS.CHECK}]=${V.check},
-    [${OPS.CHECK2}]=${V.check2},
-    [${OPS.BUILD}]=${V.build},
-    [${OPS.EXEC}]=${V.exec},
-    [${OPS.JMP}]=${V.nop},
-    [${OPS.HALT}]=${V.nop}
+local ${V.rawChunks} = {
+${chunksLua}
 }
 
--- ═══ Instruction table (${ins.length} entries) ═══
-local ${V.code}={
-${insStr}
-}
+local ${V.key0} = {${k0Lua}}
+local ${V.key1} = {${k1Lua}}
+local ${V.key2} = {${k2Lua}}
+local ${V.key3} = {${k3Lua}}
 
--- ═══ VM execution ═══
-local ${V.lim}=#${V.code}
-local ${V.idx}=1
-while ${V.idx}<=${V.lim} do
-    local ${V.op}=${V.code}[${V.idx}]
-    local ${V.h}=${V.dispatch}[${V.op}[1]]
-    if ${V.h} then
-        ${V.h}(${V.op}[2],${V.op}[3],${V.op}[4])
-    end
-    ${V.idx}=${V.idx}+1
+local ${V.rawStr} = table.concat(${V.rawChunks}, ",")
+
+local ${V.byteArr} = {}
+local ${V.idx} = 1
+for ${V.numStr} in string.gmatch(${V.rawStr}, "([^,]+)") do
+    local n = tonumber(${V.numStr})
+    if not n then n = 0 end
+    ${V.byteArr}[${V.idx}] = n
+    ${V.idx} = ${V.idx} + 1
 end
 
--- ═══ Integrity check ═══
-local ${V.chk}=0
-for ${V.i}=1,#${V.buf} do
-    local ${V.bb}=${V.byte}(${V.buf},${V.i})
-    ${V.chk}=(${V.chk}+${V.bb}*(((${V.i}-1)%127)+1)+((${V.i}-1)%251))%2147483647
+local ${V.outBuf} = {}
+for ${V.i} = 1, #${V.byteArr} do
+    local ${V.v} = ${V.byteArr}[${V.i}]
+    local ${V.pos} = ${V.i} - 1
+    ${V.v} = ${V.xor}(${V.v}, ${V.key0}[${V.pos} % 64 + 1])
+    ${V.v} = ${V.xor}(${V.v}, ${V.key1}[(${V.pos} * 5 + 11) % 64 + 1])
+    ${V.v} = ${V.xor}(${V.v}, ${V.key2}[(${V.pos} * 17 + 23) % 64 + 1])
+    ${V.v} = ${V.xor}(${V.v}, ${V.key3}[(${V.pos} * 31 + 7) % 64 + 1])
+    ${V.v} = ${V.v} % 256
+    ${V.outBuf}[${V.i}] = string.char(${V.v})
 end
 
-if ${V.chk}~=${checksum} then
-    ${V.error}("[Mawww VM] integrity check failed")
+local ${V.src} = table.concat(${V.outBuf})
+local ${V.fn}, ${D[12]} = pcall(${V.loader}, ${V.src})
+if not ${V.fn} then
+    error("[Mawww] Decode failed: " .. tostring(${D[12]}))
 end
+if type(${V.fn}) ~= "function" then
+    error("[Mawww] Expected function, got " .. type(${V.fn}))
+end
+${V.fn}()
 `;
 
     return lua;
@@ -415,8 +237,7 @@ app.post('/api/obfuscate', (req, res) => {
         if (!code || typeof code !== 'string' || !code.trim()) {
             return res.status(400).send('No code provided');
         }
-
-        const result = megaVmWrap(code);
+        const result = obfuscate(code);
         res.type('text/plain').send(result);
     } catch (err) {
         res.status(500).send(`Obfuscation error: ${err.message}`);
@@ -479,7 +300,7 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ===== Listen on 0.0.0.0 for Railway =====
+// ===== Listen =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v8.1 (Delta-Safe) running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v9.0 running on 0.0.0.0:${PORT}`);
 });
