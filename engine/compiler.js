@@ -43,28 +43,34 @@ class Compiler {
 
   compile(ast) {
     this.protos = [];
-    const main = this.compileFunction({ body: ast.body, params: [], vararg: true }, true);
-    this.protos.unshift(main); // proto 0 = main
-    return {
-      protos: this.protos,
-      mainIndex: 0
-    };
+    // compileFunction returns the Lua 1-based index of the main proto
+    const mainIdx = this.compileFunction(
+      { body: ast.body, params: [], vararg: true },
+      true
+    );
+    return { protos: this.protos, mainIndex: mainIdx };
   }
 
   compileFunction(fn, isMain = false) {
-    const K = [];      // constants
-    const upvals = []; // upvalue names (from parent)
+    // Reserve slot in protos array (1-based for Lua)
+    const slot = this.protos.length;
+    this.protos.push(null);
+    const luaIdx = slot + 1;
+
+    const K = [];
+    const upvals = [];
     const insts = [];
-    const locals = {}; // name -> regIndex
+    const locals = {};
     let regTop = 0;
     let regMax = 1;
-    const blockStack = []; // for local scoping
+    const blockStack = [];
 
     const KINT = (v) => {
       for (let i = 0; i < K.length; i++) {
         if (K[i] === v && typeof K[i] === typeof v) return i;
       }
-      K.push(v); return K.length - 1;
+      K.push(v);
+      return K.length - 1;
     };
 
     const newReg = () => {
@@ -77,40 +83,39 @@ class Compiler {
       if (r + 1 === regTop) regTop--;
     };
 
-    const emit = (...ins) => { insts.push(ins); return insts.length - 1; };
+    const emit = (...ins) => {
+      insts.push(ins);
+      return insts.length - 1;
+    };
 
     const patch = (idx, offset) => {
       insts[idx][2] = offset;
     };
 
-    // resolve variable: local, upvalue, or global
     const resolveVar = (name) => {
       if (locals[name] !== undefined) return { kind: 'local', reg: locals[name] };
-      // check parent
       const up = this.resolveUpval(fn, name);
       if (up !== null) return up;
       return { kind: 'global', name };
     };
 
-    // placeholder for upvalue resolution
     this._upvalStack = this._upvalStack || [];
     this._upvalStack.push({ fn, locals, upvals });
 
     const loadVar = (name, dest) => {
       const v = resolveVar(name);
-      if (v.kind === 'local') emit(2, dest, v.reg, 0); // MOVE
-      else if (v.kind === 'upvalue') emit(30, dest, v.idx, 0); // GETUPVAL
-      else emit(22, dest, KINT(name), 0); // GETGLOBAL
+      if (v.kind === 'local') emit(2, dest, v.reg, 0);
+      else if (v.kind === 'upvalue') emit(30, dest, v.idx, 0);
+      else emit(22, dest, KINT(name), 0);
     };
 
     const storeVar = (name, src) => {
       const v = resolveVar(name);
-      if (v.kind === 'local') emit(2, v.reg, src, 0); // MOVE
-      else if (v.kind === 'upvalue') emit(31, src, v.idx, 0); // SETUPVAL
-      else emit(23, src, KINT(name), 0); // SETGLOBAL
+      if (v.kind === 'local') emit(2, v.reg, src, 0);
+      else if (v.kind === 'upvalue') emit(31, src, v.idx, 0);
+      else emit(23, src, KINT(name), 0);
     };
 
-    // -- Expression compile --
     const cExpr = (e) => {
       switch (e.type) {
         case 'Number': { const r = newReg(); emit(1, r, KINT(e.value), 0); return r; }
@@ -127,9 +132,8 @@ class Compiler {
           const ops = { '+':3, '-':4, '*':5, '/':6, '%':7, '^':8, '..':9,
                         '==':10, '~=':11, '<':12, '<=':13, '>':14, '>=':15 };
           if (e.op === 'and') {
-            // if l is false, result is l, else r
             emit(2, d, l, 0);
-            const j = emit(28, d, 0, 0); // JMPIFNOT d +offset
+            const j = emit(28, d, 0, 0);
             emit(2, d, r, 0);
             patch(j, insts.length - j - 1);
           } else if (e.op === 'or') {
@@ -140,8 +144,8 @@ class Compiler {
           } else {
             emit(ops[e.op] || 3, d, l, r);
           }
-          freeReg(r); freeReg(l);
-          // move d to l's slot (to compact)
+          freeReg(r);
+          freeReg(l);
           return d;
         }
         case 'UnOp': {
@@ -168,13 +172,15 @@ class Compiler {
               const k = cExpr(f.key);
               const v = cExpr(f.value);
               emit(20, r, k, v);
-              freeReg(v); freeReg(k);
+              freeReg(v);
+              freeReg(k);
             } else {
               const v = cExpr(f.value);
               const ki = newReg();
               emit(1, ki, KINT(arrayIdx), 0);
               emit(20, r, ki, v);
-              freeReg(ki); freeReg(v);
+              freeReg(ki);
+              freeReg(v);
               arrayIdx++;
             }
           }
@@ -185,23 +191,17 @@ class Compiler {
           const k = cExpr(e.key);
           const d = newReg();
           emit(21, d, o, k);
-          freeReg(k); freeReg(o);
+          freeReg(k);
+          freeReg(o);
           return d;
         }
         case 'Call': {
           const f = cExpr(e.fn);
           const argRegs = e.args.map(cExpr);
           const d = newReg();
-          // Move args to be contiguous starting at d+1
-          // Simplification: emit CALL with fn at f, args in place; VM handles
-          // We'll place fn at d, args after; but for simplicity, call with f
-          // Actually let's build contiguous: fn at regN, args at regN+1..
-          // Use the fn's reg as call base
           const base = f;
-          // freeReg any beyond
-          // For simplicity, emit args right after base
-          emit(24, base, argRegs.length, 1); // result in base
-          Reg_move(d, base, emit);
+          emit(24, base, argRegs.length, 1);
+          emit(2, d, base, 0);
           argRegs.forEach(freeReg);
           return d;
         }
@@ -209,7 +209,7 @@ class Compiler {
           const o = cExpr(e.obj);
           const mIdx = KINT(e.method);
           const mFn = newReg();
-          emit(36, mFn, o, mIdx); // GETMETHOD
+          emit(36, mFn, o, mIdx);
           const argRegs = e.args.map(cExpr);
           const d = mFn;
           emit(24, mFn, argRegs.length + 1, 1);
@@ -220,9 +220,6 @@ class Compiler {
       throw new Error('Compiler: unknown expr ' + e.type);
     };
 
-    const Reg_move = (d, s, emitFn) => { emitFn(2, d, s, 0); };
-
-    // -- Statement compile --
     const cStmt = (s) => {
       switch (s.type) {
         case 'Local': {
@@ -251,7 +248,8 @@ class Compiler {
               const o = cExpr(t.obj);
               const k = cExpr(t.key);
               emit(20, o, k, r);
-              freeReg(k); freeReg(o);
+              freeReg(k);
+              freeReg(o);
             }
           });
           regs.forEach(freeReg);
@@ -262,7 +260,6 @@ class Compiler {
           const rs = s.exprs.map(cExpr);
           if (rs.length === 0) emit(25, 0, 0, 0);
           else {
-            // Move to contiguous
             const base = rs[0];
             for (let i = 1; i < rs.length; i++) emit(2, base + i, rs[i], 0);
             emit(25, base, rs.length, 0);
@@ -309,7 +306,6 @@ class Compiler {
           const stop = cExpr(s.stop);
           const step = s.step ? cExpr(s.step) : (() => { const r = newReg(); emit(1, r, KINT(1), 0); return r; })();
           const base = newReg();
-          // copy start/stop/step to base, base+1, base+2
           emit(2, base, start, 0);
           const stopR = newReg();
           emit(2, stopR, stop, 0);
@@ -319,44 +315,33 @@ class Compiler {
           const saved = locals[s.var];
           locals[s.var] = varR;
           const loopStart = insts.length;
-          // if var > stop then exit (for positive step)
-          // Simplify: compare var to stop
           const condR = newReg();
-          emit(13, condR, varR, stopR); // var <= stop
+          emit(13, condR, varR, stopR);
           const jout = emit(28, condR, 0, 0);
           cStmtsBlock(s.body);
-          emit(3, varR, varR, stepR); // var = var + step
+          emit(3, varR, varR, stepR);
           emit(26, 0, loopStart - insts.length - 1, 0);
           patch(jout, insts.length - jout - 1);
           if (saved !== undefined) locals[s.var] = saved; else delete locals[s.var];
           break;
         }
         case 'GenericFor': {
-          // Simplified: only supports pairs/ipairs with a single or multiple vars
           const iterExpr = cExpr(s.exprs[0]);
-          // We'll use a runtime helper: IterState
           const vars = s.names.map(() => newReg());
           const stateR = newReg();
           emit(1, stateR, KINT(0), 0);
           const loopStart = insts.length;
-          // Simulate iterator: call pairs/ipairs via runtime
-          // We emit a special GENERIC_FOR instruction handled by VM
-          // opcode 40 = GENERIC_FOR a b  ; a=iter function reg, b = #vars
-          // Emit: iter function loaded, then call next
           const nextR = newReg();
-          // load global 'next'
           emit(22, nextR, KINT('next'), 0);
-          // call next(iterExpr, state)
           const base = nextR;
           emit(2, base + 1, iterExpr, 0);
           emit(2, base + 2, stateR, 0);
           emit(24, base, 2, vars.length);
-          // store results into vars
           for (let i = 0; i < vars.length; i++) {
             emit(2, vars[i], base + i, 0);
             locals[s.names[i]] = vars[i];
           }
-          emit(27, vars[0], 0, 0); // if vars[0] then continue
+          emit(27, vars[0], 0, 0);
           const jout = emit(28, vars[0], 0, 0);
           cStmtsBlock(s.body);
           emit(26, 0, loopStart - insts.length - 1, 0);
@@ -372,20 +357,26 @@ class Compiler {
     const cStmtsBlock = (body) => {
       const saved = Object.assign({}, locals);
       for (const st of body) cStmt(st);
-      // restore locals declared inside block
       const keys = Object.keys(locals);
       for (const k of keys) if (saved[k] === undefined) delete locals[k];
     };
 
     for (const st of fn.body) cStmt(st);
 
-    return { K, insts, numParams: fn.params.length, isVararg: fn.vararg, upvals, numRegs: regMax };
+    const proto = {
+      K,
+      insts,
+      numParams: fn.params.length,
+      isVararg: fn.vararg,
+      upvals,
+      numRegs: regMax
+    };
+
+    this.protos[slot] = proto;
+    return luaIdx;
   }
 
-  // Simple upvalue resolution: look up in parent scopes
   resolveUpval(fn, name) {
-    // Simplified: don't support upvalues across closures in v1
-    // Can be extended later
     return null;
   }
 }
