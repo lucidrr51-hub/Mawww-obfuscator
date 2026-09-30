@@ -1,6 +1,7 @@
 {
   "name": "mawww-obfuscator",
   "version": "1.0.0",
+  "description": "Mawww Obfuscator for Roblox Lua",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
