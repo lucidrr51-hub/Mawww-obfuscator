@@ -1,16 +1,58 @@
-<select id="preset">
-    <option value="Weak">Weak</option>
-    <option value="Medium">Medium</option>
-    <option value="Strong" selected>Strong</option>
-    <option value="Minify">Minify</option>
-</select>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mawww Obfuscator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="bg-grid">
+        <header class="header">
+            <div class="header-inner">
+                <div class="header-left">
+                    <div class="logo-icon glow-green">
+                        <svg class="shield-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </div>
+                    <span class="logo-text">Mawww Obfuscator</span>
+                </div>
+            </div>
+        </header>
 
-<textarea id="input" placeholder="Paste Lua code..."></textarea>
-<textarea id="output" readonly></textarea>
+        <main class="main-content">
+            <div class="toolbar">
+                <select id="preset" class="preset-select">
+                    <option value="Weak">Weak</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Strong" selected>Strong</option>
+                    <option value="Minify">Minify</option>
+                </select>
+                <button id="obfBtn" class="btn btn-primary">Obfuscate</button>
+                <button id="copyBtn" class="btn">Copy</button>
+                <button id="dlBtn" class="btn">Download</button>
+                <label class="btn file-label">
+                    Upload
+                    <input type="file" id="fileInput" accept=".lua,.txt" hidden>
+                </label>
+            </div>
 
-<button id="obfBtn">Obfuscate</button>
-<button id="copyBtn">Copy</button>
-<button id="dlBtn">Download</button>
-<input type="file" id="fileInput" accept=".lua,.txt">
+            <div class="editor-grid">
+                <div class="editor-panel">
+                    <label class="panel-label">Input</label>
+                    <textarea id="input" class="code-area" placeholder="Paste Lua code here..."></textarea>
+                </div>
+                <div class="editor-panel">
+                    <label class="panel-label">Output</label>
+                    <textarea id="output" class="code-area" readonly placeholder="Obfuscated code will appear here..."></textarea>
+                </div>
+            </div>
 
-<div id="status"></div>
+            <div id="status" class="status-bar"></div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
