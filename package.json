@@ -1,11 +1,10 @@
 {
   "name": "mawww-obfuscator",
-  "version": "1.0.0",
-  "description": "Mawww Obfuscator — Lua Obfuscator & Roblox Raw Publisher",
+  "version": "2.0.0",
+  "description": "Mawww Obfuscator — Prometheus-powered Lua Obfuscator & Roblox Raw Publisher",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "echo \"Static site - no build needed\""
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=18.0.0"
