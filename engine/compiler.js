@@ -1,49 +1,12 @@
-// Opcodes:
-// 1  LOADK   a b c   Reg[a] = K[b]
-// 2  MOVE    a b c   Reg[a] = Reg[b]
-// 3  ADD     a b c
-// 4  SUB     a b c
-// 5  MUL     a b c
-// 6  DIV     a b c
-// 7  MOD     a b c
-// 8  POW     a b c
-// 9  CONCAT  a b c
-// 10 EQ      a b c
-// 11 NEQ     a b c
-// 12 LT      a b c
-// 13 LE      a b c
-// 14 GT      a b c
-// 15 GE      a b c
-// 16 NOT     a b c
-// 17 LEN     a b c
-// 18 NEG     a b c
-// 19 NEWTABLE a b c  Reg[a] = {}
-// 20 SETTABLE a b c  Reg[a][Reg[b]] = Reg[c]
-// 21 GETTABLE a b c  Reg[a] = Reg[b][Reg[c]]
-// 22 GETGLOBAL a b c  Reg[a] = Env[K[b]]
-// 23 SETGLOBAL a b c  Env[K[b]] = Reg[a]
-// 24 CALL    a b c   Reg[a](Reg[a+1..a+b]) ; c = 0 multi-return
-// 25 RETURN  a b      return Reg[a..a+b-1]
-// 26 JUMP    a b      PC += b
-// 27 JMPIF   a b      if Reg[a] then PC += b
-// 28 JMPIFNOT a b     if not Reg[a] then PC += b
-// 29 CLOSURE a b c    Reg[a] = closure(P[b])
-// 30 GETUPVAL a b     Reg[a] = upvals[b]
-// 31 SETUPVAL a b     upvals[b] = Reg[a]
-// 32 VARARG  a b      Reg[a..] = ...
-// 33 FORPREP a b      for loop setup
-// 34 FORLOOP a b      for loop next
-// 35 CONCATMULTI a b c
-// 36 GETMETHOD a b c  Reg[a] = Reg[b][K[c]] ; Reg[a+1] = Reg[b]
-
 class Compiler {
   constructor() {
     this.protos = [];
+    this.scopeStack = [];
   }
 
   compile(ast) {
     this.protos = [];
-    // compileFunction returns the Lua 1-based index of the main proto
+    this.scopeStack = [];
     const mainIdx = this.compileFunction(
       { body: ast.body, params: [], vararg: true },
       true
@@ -52,18 +15,22 @@ class Compiler {
   }
 
   compileFunction(fn, isMain = false) {
-    // Reserve slot in protos array (1-based for Lua)
     const slot = this.protos.length;
     this.protos.push(null);
     const luaIdx = slot + 1;
 
     const K = [];
-    const upvals = [];
+    const upvals = []; // [{ parentReg }]
     const insts = [];
     const locals = {};
     let regTop = 0;
     let regMax = 1;
-    const blockStack = [];
+
+    const parentScope = this.scopeStack.length > 0
+      ? this.scopeStack[this.scopeStack.length - 1]
+      : null;
+    const scope = { locals, parent: parentScope };
+    this.scopeStack.push(scope);
 
     const KINT = (v) => {
       for (let i = 0; i < K.length; i++) {
@@ -93,14 +60,24 @@ class Compiler {
     };
 
     const resolveVar = (name) => {
-      if (locals[name] !== undefined) return { kind: 'local', reg: locals[name] };
-      const up = this.resolveUpval(fn, name);
-      if (up !== null) return up;
+      if (locals[name] !== undefined) {
+        return { kind: 'local', reg: locals[name] };
+      }
+      let s = parentScope;
+      while (s) {
+        if (s.locals[name] !== undefined) {
+          const parentReg = s.locals[name];
+          let upIdx = upvals.findIndex(u => u.parentReg === parentReg);
+          if (upIdx === -1) {
+            upvals.push({ parentReg });
+            upIdx = upvals.length - 1;
+          }
+          return { kind: 'upvalue', idx: upIdx };
+        }
+        s = s.parent;
+      }
       return { kind: 'global', name };
     };
-
-    this._upvalStack = this._upvalStack || [];
-    this._upvalStack.push({ fn, locals, upvals });
 
     const loadVar = (name, dest) => {
       const v = resolveVar(name);
@@ -144,8 +121,7 @@ class Compiler {
           } else {
             emit(ops[e.op] || 3, d, l, r);
           }
-          freeReg(r);
-          freeReg(l);
+          freeReg(r); freeReg(l);
           return d;
         }
         case 'UnOp': {
@@ -172,15 +148,13 @@ class Compiler {
               const k = cExpr(f.key);
               const v = cExpr(f.value);
               emit(20, r, k, v);
-              freeReg(v);
-              freeReg(k);
+              freeReg(v); freeReg(k);
             } else {
               const v = cExpr(f.value);
               const ki = newReg();
               emit(1, ki, KINT(arrayIdx), 0);
               emit(20, r, ki, v);
-              freeReg(ki);
-              freeReg(v);
+              freeReg(ki); freeReg(v);
               arrayIdx++;
             }
           }
@@ -191,18 +165,23 @@ class Compiler {
           const k = cExpr(e.key);
           const d = newReg();
           emit(21, d, o, k);
-          freeReg(k);
-          freeReg(o);
+          freeReg(k); freeReg(o);
           return d;
         }
         case 'Call': {
           const f = cExpr(e.fn);
-          const argRegs = e.args.map(cExpr);
+          const n = e.args.length;
+          const argSlots = [];
+          for (let i = 0; i < n; i++) argSlots.push(newReg());
+          for (let i = 0; i < n; i++) {
+            const ar = cExpr(e.args[i]);
+            emit(2, argSlots[i], ar, 0);
+            freeReg(ar);
+          }
           const d = newReg();
-          const base = f;
-          emit(24, base, argRegs.length, 1);
-          emit(2, d, base, 0);
-          argRegs.forEach(freeReg);
+          emit(24, f, n, 1);
+          emit(2, d, f, 0);
+          argSlots.forEach(freeReg);
           return d;
         }
         case 'MethodCall': {
@@ -210,10 +189,21 @@ class Compiler {
           const mIdx = KINT(e.method);
           const mFn = newReg();
           emit(36, mFn, o, mIdx);
-          const argRegs = e.args.map(cExpr);
-          const d = mFn;
-          emit(24, mFn, argRegs.length + 1, 1);
-          argRegs.forEach(freeReg);
+          // Reserve self slot (written by VM at runtime as Reg[mFn+1])
+          if (regTop < mFn + 2) regTop = mFn + 2;
+          if (regTop > regMax) regMax = regTop;
+          const n = e.args.length;
+          const argSlots = [];
+          for (let i = 0; i < n; i++) argSlots.push(newReg());
+          for (let i = 0; i < n; i++) {
+            const ar = cExpr(e.args[i]);
+            emit(2, argSlots[i], ar, 0);
+            freeReg(ar);
+          }
+          const d = newReg();
+          emit(24, mFn, n + 1, 1);
+          emit(2, d, mFn, 0);
+          argSlots.forEach(freeReg);
           return d;
         }
       }
@@ -248,8 +238,7 @@ class Compiler {
               const o = cExpr(t.obj);
               const k = cExpr(t.key);
               emit(20, o, k, r);
-              freeReg(k);
-              freeReg(o);
+              freeReg(k); freeReg(o);
             }
           });
           regs.forEach(freeReg);
@@ -363,21 +352,17 @@ class Compiler {
 
     for (const st of fn.body) cStmt(st);
 
+    this.scopeStack.pop();
+
     const proto = {
-      K,
-      insts,
+      K, insts,
       numParams: fn.params.length,
       isVararg: fn.vararg,
       upvals,
       numRegs: regMax
     };
-
     this.protos[slot] = proto;
     return luaIdx;
-  }
-
-  resolveUpval(fn, name) {
-    return null;
   }
 }
 
