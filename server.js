@@ -18,7 +18,7 @@ const PORT = process.env.PORT || 3000;
 
 // ---------- CONFIG ----------
 const TEMP_DIR = path.join(os.tmpdir(), 'mawww-obs');
-const MAX_INPUT_BYTES = 15 * 1024 * 1024; // 15 MB
+const MAX_INPUT_BYTES = 15 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -99,7 +99,10 @@ function serializeProto(proto, key) {
 // ---------- BUILD FINAL LUA OUTPUT ----------
 function buildLuaOutput(compiled, key) {
     const protosLua = compiled.protos.map(p => serializeProto(p, key));
-    const vmRuntime = fs.readFileSync(path.join(__dirname, 'engine', 'vm.lua'), 'utf8');
+
+    // BACA vm.lua dan STRIP `return runVM` di akhir
+    let vmRuntime = fs.readFileSync(path.join(__dirname, 'engine', 'vm.lua'), 'utf8');
+    vmRuntime = vmRuntime.replace(/^\s*return\s+runVM\s*;?\s*$/m, '');
 
     const guard = `
 do
@@ -156,19 +159,13 @@ app.post('/api/fetch-raw', async (req, res) => {
         return res.status(400).json({ error: 'Invalid URL.' });
     }
 
-    // SSRF Protection
     try {
         const parsed = new URL(url);
         const host = parsed.hostname.toLowerCase();
         if (
-            host === 'localhost' ||
-            host === '127.0.0.1' ||
-            host === '0.0.0.0' ||
-            host === '::1' ||
-            /^10\./.test(host) ||
-            /^192\.168\./.test(host) ||
-            /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-            /^169\.254\./.test(host)
+            host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1' ||
+            /^10\./.test(host) || /^192\.168\./.test(host) ||
+            /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host)
         ) {
             return res.status(400).json({ error: 'URL tidak diizinkan.' });
         }
@@ -177,10 +174,7 @@ app.post('/api/fetch-raw', async (req, res) => {
     }
 
     const fetchOnce = (targetUrl, redirectCount = 0) => new Promise((resolve, reject) => {
-        if (redirectCount > 3) {
-            reject(new Error('Too many redirects'));
-            return;
-        }
+        if (redirectCount > 3) { reject(new Error('Too many redirects')); return; }
         const client = targetUrl.startsWith('https') ? https : http;
         const reqFetch = client.get(targetUrl, {
             timeout: FETCH_TIMEOUT_MS,
@@ -191,28 +185,18 @@ app.post('/api/fetch-raw', async (req, res) => {
                 fetchOnce(next, redirectCount + 1).then(resolve).catch(reject);
                 return;
             }
-            if (r.statusCode !== 200) {
-                reject(new Error('HTTP ' + r.statusCode));
-                return;
-            }
+            if (r.statusCode !== 200) { reject(new Error('HTTP ' + r.statusCode)); return; }
             let d = '';
             let size = 0;
             r.on('data', c => {
                 size += c.length;
-                if (size > MAX_INPUT_BYTES) {
-                    reqFetch.destroy();
-                    reject(new Error('File terlalu besar'));
-                    return;
-                }
+                if (size > MAX_INPUT_BYTES) { reqFetch.destroy(); reject(new Error('File terlalu besar')); return; }
                 d += c;
             });
             r.on('end', () => resolve(d));
         });
         reqFetch.on('error', reject);
-        reqFetch.on('timeout', () => {
-            reqFetch.destroy();
-            reject(new Error('Timeout'));
-        });
+        reqFetch.on('timeout', () => { reqFetch.destroy(); reject(new Error('Timeout')); });
     });
 
     try {
@@ -259,11 +243,7 @@ app.post('/api/obfuscate', async (req, res) => {
 
 // ---------- API: STATUS ----------
 app.get('/api/status', (req, res) => {
-    res.json({
-        pending: queue.pending,
-        size: queue.size,
-        concurrency: queue.concurrency
-    });
+    res.json({ pending: queue.pending, size: queue.size, concurrency: queue.concurrency });
 });
 
 // ---------- START ----------
