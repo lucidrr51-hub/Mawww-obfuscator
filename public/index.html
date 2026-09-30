@@ -1,0 +1,16 @@
+<select id="preset">
+    <option value="Weak">Weak</option>
+    <option value="Medium">Medium</option>
+    <option value="Strong" selected>Strong</option>
+    <option value="Minify">Minify</option>
+</select>
+
+<textarea id="input" placeholder="Paste Lua code..."></textarea>
+<textarea id="output" readonly></textarea>
+
+<button id="obfBtn">Obfuscate</button>
+<button id="copyBtn">Copy</button>
+<button id="dlBtn">Download</button>
+<input type="file" id="fileInput" accept=".lua,.txt">
+
+<div id="status"></div>
