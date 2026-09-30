@@ -19,55 +19,21 @@ const copyLoadstringBtn = document.getElementById('copyLoadstringBtn');
 const openRawBtn = document.getElementById('openRawBtn');
 
 // ============================================================
-//  MAWWW VM OBFUSCATOR v5.0 — "Segment Dispatch" Edition
-//  - Pure arithmetic checksum (no bitwise → zero JS/Lua mismatch)
-//  - Per-segment unique keys
-//  - No _ENV / getfenv / debug.* / \ddd escapes
-//  - 100% compatible: Delta, Synapse, Krnl, Fluxus, Solara, Xeno
+//  MAWWW CUSTOM VM v6.0 — Bytecode Machine
+//  - Random opcodes per obfuscation
+//  - Register file + Stack + Dispatch table
+//  - Decoy instructions (huge output, unreadable)
+//  - Delta-safe: no getfenv/_ENV/debug.*/\ddd escapes
 // ============================================================
 
-// ─── Seeded PRNG ───
-class PRNG {
-    constructor(seed) { this.s = seed >>> 0; }
-    next() {
-        let s = this.s;
-        s = (s ^ (s << 13)) >>> 0;
-        s = (s ^ (s >>> 17)) >>> 0;
-        s = (s ^ (s << 5)) >>> 0;
-        this.s = s >>> 0;
-        return this.s;
-    }
-    byte() { return this.next() & 0xFF; }
-    range(n) { return this.next() % n; }
-}
-
-// ─── S-Box ───
-function makeSBox(prng) {
-    const s = new Array(256);
-    for (let i = 0; i < 256; i++) s[i] = i;
-    for (let i = 255; i > 0; i--) {
-        const j = prng.range(i + 1);
-        const t = s[i]; s[i] = s[j]; s[j] = t;
-    }
-    return s;
-}
-function makeInvSBox(sbox) {
-    const inv = new Array(256);
-    for (let i = 0; i < 256; i++) inv[sbox[i]] = i;
-    return inv;
-}
-
-// ─── UTF-8 Encode ───
 function utf8Encode(str) {
     const out = [];
     for (let i = 0; i < str.length; i++) {
         let c = str.charCodeAt(i);
         if (c < 0x80) out.push(c);
-        else if (c < 0x800) {
-            out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
-        } else if (c < 0xD800 || c >= 0xE000) {
-            out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
-        } else {
+        else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
+        else if (c < 0xD800 || c >= 0xE000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+        else {
             i++;
             c = 0x10000 + (((c & 0x3FF) << 10) | (str.charCodeAt(i) & 0x3FF));
             out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 0x3F), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
@@ -76,213 +42,205 @@ function utf8Encode(str) {
     return out;
 }
 
-// ─── Rotate helpers ───
-function rotl8(v, n) {
-    n = n & 7;
-    if (n === 0) return v & 0xFF;
-    return ((v << n) | (v >>> (8 - n))) & 0xFF;
-}
-function rotr8(v, n) {
-    n = n & 7;
-    if (n === 0) return v & 0xFF;
-    return ((v >>> n) | (v << (8 - n))) & 0xFF;
-}
-
-// ─── Main Obfuscator ───
 function obfuscateLua(source) {
     if (!source || !source.trim()) {
         throw new Error('Please provide Lua source code to obfuscate.');
     }
 
-    // ═══ Layer 1: UTF-8 encode ═══
-    const rawBytes = utf8Encode(source);
-    const N = rawBytes.length;
+    // ─── UTF-8 encode ───
+    const bytes = utf8Encode(source);
 
-    // ═══ Layer 2: Seeded PRNG ═══
-    const masterSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
-    const prng = new PRNG(masterSeed);
-    for (let i = 0; i < 500; i++) prng.next();
+    // ─── PRNG ───
+    let seed = (Math.random() * 0xFFFFFFFF) >>> 0;
+    const nxt = () => {
+        let s = seed;
+        s = (s ^ (s << 13)) >>> 0;
+        s = (s ^ (s >>> 17)) >>> 0;
+        s = (s ^ (s << 5)) >>> 0;
+        seed = s;
+        return seed;
+    };
+    const ri = (n) => nxt() % n;
 
-    const sbox = makeSBox(prng);
-    const invSbox = makeInvSBox(sbox);
-
-    // ═══ Layer 3: Split into segments (VM instructions) ═══
-    const SEG_SIZE = 96;
-    const segments = [];
-    for (let i = 0; i < N; i += SEG_SIZE) {
-        segments.push(rawBytes.slice(i, i + SEG_SIZE));
-    }
-    const numSegs = segments.length;
-
-    // ═══ Layer 4: Per-segment unique keys ═══
-    const keyLen = 32;
-    const segKeys = [];
-    for (let i = 0; i < numSegs; i++) {
-        const k = new Array(keyLen);
-        for (let j = 0; j < keyLen; j++) k[j] = prng.byte();
-        segKeys.push(k);
-    }
-
-    // ═══ Layer 5: Encrypt each segment ═══
-    // Encryption: XOR(key) → SBox → Rotate → XOR(prev_byte)
-    const encSegs = segments.map((seg, sIdx) => {
-        const key = segKeys[sIdx];
-        const enc = [];
-        let prev = sIdx & 0xFF;
-        for (let i = 0; i < seg.length; i++) {
-            let v = seg[i];
-            v = (v ^ key[(i * 3 + sIdx * 5 + 7) % keyLen]) & 0xFF;
-            v = sbox[v];
-            v = rotl8(v, ((i + sIdx) % 7) + 1);
-            v = (v ^ prev) & 0xFF;
-            prev = seg[i];
-            enc.push(v);
-        }
-        return enc;
-    });
-
-    // ═══ Layer 6: Simple arithmetic checksum ═══
-    // SAFE: hanya pakai +, *, % — hasil dijamin identik di JS & Lua
-    let checksum = 0;
-    for (let i = 0; i < N; i++) {
-        checksum = (checksum + rawBytes[i] * ((i % 127) + 1) + (i % 251)) % 2147483647;
-    }
-
-    // ═══ Layer 7: Random identifiers ═══
-    const rnd = (n = 13) => {
+    // ─── Random name generator ───
+    const nm = (len) => {
         const cs = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
         let s = '_';
-        for (let i = 0; i < n; i++) s += cs[Math.floor(Math.random() * cs.length)];
+        for (let i = 0; i < (len || 10); i++) s += cs[ri(cs.length)];
         return s;
     };
-    const v = {};
-    const names = ['keyvault','sboxT','isboxT','segTbl','keyTbl','raw','out','src',
-                   'fn','ok','e','i','n','j','k','t','x','y','z','a','b','c','d',
-                   'f','g','h','m','p','q','s','bx','bd','br','ls','rs','floor',
-                   'chk','expect','buf','dec','concat','char','byte','gmatch',
-                   'tonum','pcall','type','error','tostring','loadstr','mathF',
-                   'state','ptr','lim','acc','val','pos','rot','prev','seg','idx','tmp'];
-    names.forEach(nm => v[nm] = rnd());
 
-    // Build Lua tables
-    const sboxLua = sbox.join(',');
-    const invSboxLua = invSbox.join(',');
-    const keyTblLua = segKeys.map(k => `{${k.join(',')}}`).join(',\n    ');
-    const segTblLua = encSegs.map(s => `{${s.join(',')}}`).join(',\n    ');
+    // ─── Unique random opcodes ───
+    const usedOps = new Set();
+    const newOp = () => {
+        let o;
+        do { o = ri(200) + 50; } while (usedOps.has(o));
+        usedOps.add(o);
+        return o;
+    };
 
-    // ═══ Build Lua payload ═══
-    const lua = `-- Mawww VM Obfuscator v5.0 | Segment Dispatch Edition
--- DO NOT EDIT — integrity check will fail
+    const OPS = {
+        PUSH:  newOp(), PUSH2: newOp(),
+        NOP:   newOp(), NOP2:  newOp(),
+        MOV:   newOp(), LOAD:  newOp(),
+        ADD:   newOp(), XOR:   newOp(),
+        CHECK: newOp(), BUILD: newOp(),
+        EXEC:  newOp(), JMP:   newOp(),
+        HALT:  newOp()
+    };
 
--- ═══ Core references (local for speed) ═══
-local ${v.concat}  = table.concat
-local ${v.char}    = string.char
-local ${v.byte}    = string.byte
-local ${v.gmatch}  = string.gmatch
-local ${v.tonum}   = tonumber
-local ${v.pcall}   = pcall
-local ${v.type}    = type
-local ${v.error}   = error
-local ${v.tostring}= tostring
-local ${v.mathF}   = math.floor
-local ${v.loadstr} = loadstring
-if ${v.type}(${v.loadstr}) ~= "function" then ${v.loadstr} = load end
+    // ─── Build instruction table ───
+    const ins = [];
+    for (let i = 0; i < bytes.length; i++) {
+        const key = ri(256);
+        const enc = bytes[i] ^ key;
 
--- ═══ Universal bit ops (safe for byte-range only) ═══
-local ${v.bx}, ${v.bd}, ${v.br}, ${v.ls}, ${v.rs}
-local __bit32 = (function()
-    local ok, r = ${v.pcall}(function() return bit32 end)
-    if ok and ${v.type}(r) == "table" and r.bxor then return r end
-    ok, r = ${v.pcall}(function() return bit end)
-    if ok and ${v.type}(r) == "table" and r.bxor then return r end
-    return nil
-end)()
+        // Decoy NOP
+        ins.push([OPS.NOP, ri(256), ri(256), ri(256)]);
+        // Decoy MOV
+        ins.push([OPS.MOV, ri(16), ri(256), 0]);
+        // Real PUSH
+        ins.push([OPS.PUSH, enc, key, i & 0xFF]);
+        // Decoy CHECK (setiap 3 byte)
+        if (i % 3 === 0) ins.push([OPS.CHECK, ri(256), ri(256), 0]);
+        // Decoy NOP2 (setiap 2 byte)
+        if (i % 2 === 0) ins.push([OPS.NOP2, 0, 0, 0]);
+        // Decoy LOAD tambahan (setiap 5 byte)
+        if (i % 5 === 0) ins.push([OPS.LOAD, ri(16), ri(256), 0]);
+    }
 
-if __bit32 then
-    ${v.bx} = function(a,b) return __bit32.bxor(a,b) end
-    ${v.bd} = function(a,b) return __bit32.band(a,b) end
-    ${v.br} = function(a,b) return __bit32.bor(a,b) end
-    ${v.ls} = function(a,b) return __bit32.lshift(a,b) end
-    ${v.rs} = function(a,b) return __bit32.rshift(a,b) end
-else
-    ${v.bx} = function(a,b) local r,p=0,1 while a>0 or b>0 do local x,y=a%2,b%2 if x~=y then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
-    ${v.bd} = function(a,b) local r,p=0,1 while a>0 and b>0 do if a%2==1 and b%2==1 then r=r+p end a=${v.mathF}(a/2) b=${v.mathF}(b/2) p=p*2 end return r end
-    ${v.br} = function(a,b) local r,p=0,1 while a>0 or b>0 do if a%2==1 or b%2==1 then r=r+p end a=${v.mathF}(a/2) b=${v.mathF}(b/2) p=p*2 end return r end
-    ${v.ls} = function(a,b) return a*(2^b) end
-    ${v.rs} = function(a,b) return ${v.mathF}(a/(2^b)) end
-end
+    // Final
+    ins.push([OPS.BUILD, 0, 0, 0]);
+    ins.push([OPS.EXEC,  0, 0, 0]);
+    ins.push([OPS.HALT,  0, 0, 0]);
 
--- ═══ VM Tables ═══
-local ${v.sboxT}  = {${sboxLua}}
-local ${v.isboxT} = {${invSboxLua}}
+    // ─── Random variable names ───
+    const N = {};
+    ['r','s','n','p','buf','floor','chr','concat','pcall','type','err','tostr',
+     'bx','ok1','t1','ok2','t2','B','hPush','hNop','hMov','hLoad','hAdd','hXor',
+     'hCheck','hBuild','hExec','hJmp','hHalt','dispatch','code','lim','ins','o','h',
+     'loadstr','fn','er','ok','i','a','b','c','x','y','acc','r2','p2']
+    .forEach(k => N[k] = nm(11 + ri(4)));
 
-local ${v.keyTbl} = {
-    ${keyTblLua}
-}
+    const insStr = ins.map(row => `    {${row.join(',')}}`).join(',\n');
 
-local ${v.segTbl} = {
-    ${segTblLua}
-}
+    // ─── Output Lua ───
+    const lua = `-- Mawww Custom VM v6.0
+-- Generated: ${new Date().toISOString()}
+-- Random opcodes | Register file | Dispatch table | Decoy instructions
 
--- ═══ VM Dispatch Loop ═══
-local ${v.dec} = {}
-local ${v.ptr} = 1
+local ${N.r}={}
+local ${N.s}={}
+local ${N.n}=0
+local ${N.p}=1
+local ${N.buf}=""
+local ${N.floor}=math.floor
+local ${N.chr}=string.char
+local ${N.concat}=table.concat
+local ${N.pcall}=pcall
+local ${N.type}=type
+local ${N.err}=error
+local ${N.tostr}=tostring
 
-for ${v.seg} = 1, #${v.segTbl} do
-    local segData = ${v.segTbl}[${v.seg}]
-    local segKey  = ${v.keyTbl}[${v.seg}]
-    local segLen  = #segData
-    local segIdx  = ${v.seg} - 1
-    local prev    = segIdx % 256
-    
-    for ${v.i} = 1, segLen do
-        local ${v.n} = segData[${v.i}]
-        
-        -- Reverse XOR(prev)
-        ${v.n} = ${v.bx}(${v.n}, prev)
-        ${v.n} = ${v.bd}(${v.n}, 255)
-        
-        -- Reverse rotate
-        local ${v.rot} = (((${v.i} - 1) + segIdx) % 7) + 1
-        ${v.n} = ${v.br}(${v.rs}(${v.n}, ${v.rot}), ${v.ls}(${v.bd}(${v.n}, (2^${v.rot}) - 1), 8 - ${v.rot}))
-        ${v.n} = ${v.bd}(${v.n}, 255)
-        
-        -- Reverse SBox
-        ${v.n} = ${v.isboxT}[${v.n} + 1]
-        
-        -- Reverse XOR(key)
-        ${v.n} = ${v.bx}(${v.n}, segKey[(((${v.i} - 1) * 3 + segIdx * 5 + 7) % 32) + 1])
-        ${v.n} = ${v.bd}(${v.n}, 255)
-        
-        -- Original byte untuk prev (dari segData, bukan hasil decrypt)
-        prev = ${v.bx}(${v.n}, 0)
-        
-        ${v.dec}[${v.ptr}] = ${v.char}(${v.n})
-        ${v.ptr} = ${v.ptr} + 1
+-- Universal XOR
+local ${N.bx}
+do
+    local ${N.ok1},${N.t1}=${N.pcall}(function() return bit32 end)
+    if ${N.ok1} and ${N.type}(${N.t1})=="table" and ${N.t1}.bxor then
+        local ${N.B}=${N.t1}
+        ${N.bx}=function(${N.a},${N.b}) return ${N.B}.bxor(${N.a},${N.b}) end
+    else
+        local ${N.ok2},${N.t2}=${N.pcall}(function() return bit end)
+        if ${N.ok2} and ${N.type}(${N.t2})=="table" and ${N.t2}.bxor then
+            local ${N.B}=${N.t2}
+            ${N.bx}=function(${N.a},${N.b}) return ${N.B}.bxor(${N.a},${N.b}) end
+        else
+            ${N.bx}=function(${N.a},${N.b})
+                ${N.a}=${N.floor}(${N.a})
+                ${N.b}=${N.floor}(${N.b})
+                local ${N.r2},${N.p2}=0,1
+                while ${N.a}>0 or ${N.b}>0 do
+                    local ${N.x},${N.y}=${N.a}%2,${N.b}%2
+                    if ${N.x}~=${N.y} then ${N.r2}=${N.r2}+${N.p2} end
+                    ${N.a}=(${N.a}-${N.x})/2
+                    ${N.b}=(${N.b}-${N.y})/2
+                    ${N.p2}=${N.p2}*2
+                end
+                return ${N.r2}
+            end
+        end
     end
 end
 
-local SRC = ${v.concat}(${v.dec})
-
--- ═══ Integrity Check (pure arithmetic — safe in Lua) ═══
-local ${v.chk} = 0
-for ${v.i} = 1, #SRC do
-    local bb = ${v.byte}(SRC, ${v.i})
-    ${v.chk} = (${v.chk} + bb * (((${v.i} - 1) % 127) + 1) + ((${v.i} - 1) % 251)) % 2147483647
+-- Instruction handlers
+local ${N.hPush}=function(${N.a},${N.b},${N.c})
+    ${N.n}=${N.n}+1
+    ${N.s}[${N.n}]=${N.chr}(${N.floor}(${N.bx}(${N.a},${N.b})%256))
 end
-
-if ${v.chk} ~= ${checksum} then
-    ${v.error}("Mawww: integrity check failed")
+local ${N.hNop}=function(${N.a},${N.b},${N.c}) return ${N.a} end
+local ${N.hMov}=function(${N.a},${N.b},${N.c}) ${N.r}[${N.a}]=${N.b} return ${N.b} end
+local ${N.hLoad}=function(${N.a},${N.b},${N.c}) return ${N.r}[${N.a}] or 0 end
+local ${N.hAdd}=function(${N.a},${N.b},${N.c}) return ${N.a}+${N.b} end
+local ${N.hXor}=function(${N.a},${N.b},${N.c}) return ${N.bx}(${N.a},${N.b}) end
+local ${N.hCheck}=function(${N.a},${N.b},${N.c})
+    local ${N.acc}=0
+    for ${N.i}=1,64 do ${N.acc}=${N.acc}+${N.i} end
+    return ${N.acc}==2080
 end
-
--- ═══ Execute ═══
-local ${v.fn}, ${v.e} = ${v.loadstr}(SRC)
-if ${v.type}(${v.fn}) ~= "function" then
-    ${v.error}("Mawww: decode failed - " .. ${v.tostring}(${v.e}))
+local ${N.hBuild}=function(${N.a},${N.b},${N.c})
+    ${N.buf}=${N.concat}(${N.s})
+    return ${N.buf}
 end
-local ${v.ok} = ${v.pcall}(${v.fn})
-if not ${v.ok} then
-    ${v.error}("Mawww: exec failed - " .. ${v.tostring}(${v.e}))
+local ${N.hExec}=function(${N.a},${N.b},${N.c})
+    local ${N.loadstr}=loadstring
+    if ${N.type}(${N.loadstr})~="function" then ${N.loadstr}=load end
+    if ${N.type}(${N.loadstr})~="function" then
+        ${N.err}("[VM] loadstring unavailable")
+    end
+    local ${N.fn},${N.er}=${N.loadstr}(${N.buf})
+    if ${N.type}(${N.fn})~="function" then
+        ${N.err}("[VM] decode failed: "..${N.tostr}(${N.er}))
+    end
+    local ${N.ok},${N.er}=${N.pcall}(${N.fn})
+    if not ${N.ok} then
+        ${N.err}("[VM] exec failed: "..${N.tostr}(${N.er}))
+    end
+end
+local ${N.hJmp}=function(${N.a},${N.b},${N.c}) return ${N.a} end
+local ${N.hHalt}=function(${N.a},${N.b},${N.c}) return nil end
+
+-- Dispatch table
+local ${N.dispatch}={
+    [${OPS.PUSH}]=${N.hPush},
+    [${OPS.PUSH2}]=${N.hPush},
+    [${OPS.NOP}]=${N.hNop},
+    [${OPS.NOP2}]=${N.hNop},
+    [${OPS.MOV}]=${N.hMov},
+    [${OPS.LOAD}]=${N.hLoad},
+    [${OPS.ADD}]=${N.hAdd},
+    [${OPS.XOR}]=${N.hXor},
+    [${OPS.CHECK}]=${N.hCheck},
+    [${OPS.BUILD}]=${N.hBuild},
+    [${OPS.EXEC}]=${N.hExec},
+    [${OPS.JMP}]=${N.hJmp},
+    [${OPS.HALT}]=${N.hHalt},
+}
+
+-- Instruction table
+local ${N.code}={
+${insStr}
+}
+
+-- VM execution loop
+local ${N.lim}=#${N.code}
+while ${N.p}<=${N.lim} do
+    local ${N.ins}=${N.code}[${N.p}]
+    local ${N.o}=${N.ins}[1]
+    local ${N.h}=${N.dispatch}[${N.o}]
+    if ${N.h} then
+        ${N.h}(${N.ins}[2],${N.ins}[3],${N.ins}[4])
+    end
+    ${N.p}=${N.p}+1
 end
 `;
 
@@ -329,7 +287,7 @@ obfuscateBtn.addEventListener('click', () => {
         luaOutput.value = result;
         publishBtn.disabled = false;
         rawSection.style.display = 'none';
-        showStatus('🔒 VM-obfuscated! Delta-safe + zero-bug.', 'success');
+        showStatus(`🔒 VM v6 obfuscated! Output: ${result.length.toLocaleString()} chars.`, 'success');
         updateCounts();
     } catch (err) {
         showStatus('❌ ' + err.message, 'error');
