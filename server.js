@@ -34,13 +34,12 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // ============================================================
-//  ULTRA OBFUSCATOR v12.0 — Custom VM (Fixed & Robust)
+//  ULTRA OBFUSCATOR v13.0 — Stable Custom VM
 //  - Custom VM dengan random opcodes (unik per obfuscate)
-//  - Enkripsi bytecode: XOR satu lapis dengan kunci berotasi
-//    (dijamin reversibel, tidak akan menghasilkan opcode invalid)
+//  - Enkripsi bytecode: XOR reversibel + verifikasi ketat
 //  - Decoy arrays & dead code
 //  - Anti-debug timing check (aman untuk Delta)
-//  - Kompatibel penuh dengan Delta, Synapse, Krnl, Fluxus, dll.
+//  - Kompatibel: Delta, Synapse, Krnl, Fluxus, Solara, Xeno
 // ============================================================
 
 function makeNameGenerator() {
@@ -63,10 +62,10 @@ function obfuscate(source) {
     // ─── Nama variabel acak ───
     const V = {};
     const baseNames = [
-        'vm_loader', 'vm_opcodes', 'vm_bytecode', 'vm_key', 'vm_keylen',
-        'vm_pc', 'vm_stack', 'vm_output', 'anti_debug', 'xor_func',
-        'bit_lib', 'loadstr', 'pcall_fn', 'type_fn', 'tostring_fn',
-        'char_fn', 'concat_fn', 'sbox_table', 'inv_sbox_table'
+        'vm_loader', 'vm_opcodes', 'vm_bytecode', 'vm_key', 'vm_pc',
+        'vm_stack', 'vm_output', 'anti_debug', 'xor_func', 'bit_lib',
+        'loadstr', 'pcall_fn', 'type_fn', 'tostring_fn', 'char_fn',
+        'concat_fn', 'os_clock', 'floor_fn'
     ];
     baseNames.forEach(k => V[k] = nm());
 
@@ -76,12 +75,11 @@ function obfuscate(source) {
     // ─── Konversi source ke byte ───
     const sourceBytes = Buffer.from(source, 'utf8');
 
-    // ─── Buat opcode acak ───
-    // Pastikan semua opcode unik dan dalam rentang aman (60-250)
+    // ─── Buat opcode acak (unik) ───
     const usedOps = new Set();
     const newOp = () => {
         let o;
-        do { o = Math.floor(Math.random() * 190) + 60; } while (usedOps.has(o));
+        do { o = Math.floor(Math.random() * 180) + 60; } while (usedOps.has(o));
         usedOps.add(o);
         return o;
     };
@@ -99,7 +97,7 @@ function obfuscate(source) {
     rawBytecode.push((sourceBytes.length >> 8) & 0xFF);
     rawBytecode.push((sourceBytes.length >> 16) & 0xFF);
 
-    // Body: PUSH_BYTE untuk setiap byte source
+    // Body: PUSH_BYTE untuk setiap byte
     for (let i = 0; i < sourceBytes.length; i++) {
         rawBytecode.push(OP_PUSH_BYTE);
         rawBytecode.push(sourceBytes[i]);
@@ -110,8 +108,7 @@ function obfuscate(source) {
     rawBytecode.push(OP_EXECUTE);
     rawBytecode.push(OP_HALT);
 
-    // ─── Enkripsi bytecode (XOR satu lapis, reversibel) ───
-    // Kunci: 64 byte acak
+    // ─── Enkripsi bytecode (XOR satu lapis, 100% reversibel) ───
     const KEY_LEN = 64;
     const key = [];
     for (let i = 0; i < KEY_LEN; i++) key.push(Math.floor(Math.random() * 256));
@@ -120,13 +117,11 @@ function obfuscate(source) {
         return (b ^ key[i % KEY_LEN]) & 0xFF;
     });
 
-    // ─── Verifikasi: pastikan dekripsi mengembalikan nilai asli ───
-    const verify = encryptedBytecode.map((b, i) => {
-        return (b ^ key[i % KEY_LEN]) & 0xFF;
-    });
+    // ─── Verifikasi ketat: pastikan dekripsi mengembalikan nilai asli ───
     for (let i = 0; i < rawBytecode.length; i++) {
-        if (verify[i] !== rawBytecode[i]) {
-            throw new Error('Encryption verification failed at ' + i);
+        const decrypted = (encryptedBytecode[i] ^ key[i % KEY_LEN]) & 0xFF;
+        if (decrypted !== rawBytecode[i]) {
+            throw new Error(`Encryption verification failed at index ${i}: expected ${rawBytecode[i]}, got ${decrypted}`);
         }
     }
 
@@ -146,7 +141,7 @@ function obfuscate(source) {
     const keyStr = key.join(',');
     const bytecodeStr = encryptedBytecode.join(',');
 
-    const lua = `-- Mawww Obfuscator v12.0 | Custom VM (Fixed)
+    const lua = `-- Mawww Obfuscator v13.0 | Stable Custom VM
 -- Generated: ${new Date().toISOString()}
 -- DO NOT EDIT
 
@@ -176,6 +171,7 @@ else
     end
 end
 
+-- XOR function (handles negative values correctly)
 local ${V.xor_func}
 if ${V.bit_lib} then
     local b = ${V.bit_lib}.bxor
@@ -208,7 +204,10 @@ if type(${V.loadstr}) ~= "function" then error("[Mawww] No loadstring") end
 -- Dekripsi bytecode (XOR satu lapis, reversibel)
 local decrypted = {}
 for i = 1, #${V.vm_bytecode} do
-    decrypted[i] = ${V.xor_func}(${V.vm_bytecode}[i], ${V.vm_key}[(i - 1) % 64 + 1]) % 256
+    local v = ${V.xor_func}(${V.vm_bytecode}[i], ${V.vm_key}[(i - 1) % 64 + 1])
+    -- Handle negative values correctly
+    decrypted[i] = v % 256
+    if decrypted[i] < 0 then decrypted[i] = decrypted[i] + 256 end
 end
 
 -- VM Runtime
@@ -216,7 +215,6 @@ local ${V.vm_pc} = 1
 local ${V.vm_stack} = {}
 local ${V.vm_output} = nil
 
--- Opcode constants
 local OP_PUSH_BYTE = ${OP_PUSH_BYTE}
 local OP_BUILD_STRING = ${OP_BUILD_STRING}
 local OP_EXECUTE = ${OP_EXECUTE}
@@ -245,18 +243,13 @@ while ${V.vm_pc} <= #decrypted do
             error("[Mawww] Nothing to execute")
         end
 
-        -- Handle Delta loadstring: (true, function) atau (false, error)
         local load_ok, load_res = pcall(${V.loadstr}, src)
         if not load_ok then
             error("[Mawww] Decode failed: " .. tostring(load_res))
         end
 
         local fn = load_res
-        -- Jika load_res adalah boolean true (Delta), maka fungsi ada di arg kedua
-        -- Tapi pcall hanya mengembalikan satu nilai. Kita coba panggil langsung.
         if type(fn) == "boolean" then
-            -- Delta: loadstring mengembalikan (true, function) di luar pcall
-            -- Karena kita pakai pcall, kita perlu memanggil ulang loadstring
             local direct_ok, direct_fn = ${V.loadstr}(src)
             if direct_ok and type(direct_fn) == "function" then
                 fn = direct_fn
@@ -365,5 +358,5 @@ app.get('*', (req, res) => {
 
 // ===== Listen =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v12.0 (Fixed VM) running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v13.0 (Stable VM) running on 0.0.0.0:${PORT}`);
 });
