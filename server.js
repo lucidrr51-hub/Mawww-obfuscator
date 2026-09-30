@@ -34,12 +34,12 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // ============================================================
-//  ULTRA OBFUSCATOR v13.0 — Stable Custom VM
+//  ULTRA OBFUSCATOR v14.0 — Stable Custom VM
 //  - Custom VM dengan random opcodes (unik per obfuscate)
 //  - Enkripsi bytecode: XOR reversibel + verifikasi ketat
 //  - Decoy arrays & dead code
 //  - Anti-debug timing check (aman untuk Delta)
-//  - Kompatibel: Delta, Synapse, Krnl, Fluxus, Solara, Xeno
+//  - Magic Byte untuk verifikasi dekripsi di VM
 // ============================================================
 
 function makeNameGenerator() {
@@ -59,20 +59,18 @@ function makeNameGenerator() {
 function obfuscate(source) {
     const nm = makeNameGenerator();
 
-    // ─── Nama variabel acak ───
     const V = {};
     const baseNames = [
         'vm_loader', 'vm_opcodes', 'vm_bytecode', 'vm_key', 'vm_pc',
         'vm_stack', 'vm_output', 'anti_debug', 'xor_func', 'bit_lib',
         'loadstr', 'pcall_fn', 'type_fn', 'tostring_fn', 'char_fn',
-        'concat_fn', 'os_clock', 'floor_fn'
+        'concat_fn', 'os_clock', 'floor_fn', 'magic_byte', 'decrypted'
     ];
     baseNames.forEach(k => V[k] = nm());
 
-    const D = []; // Decoy names
+    const D = [];
     for (let i = 0; i < 25; i++) D.push(nm());
 
-    // ─── Konversi source ke byte ───
     const sourceBytes = Buffer.from(source, 'utf8');
 
     // ─── Buat opcode acak (unik) ───
@@ -92,6 +90,10 @@ function obfuscate(source) {
     // ─── Bangun bytecode mentah ───
     const rawBytecode = [];
 
+    // Magic byte (untuk verifikasi)
+    const MAGIC = 0xAA;
+    rawBytecode.push(MAGIC);
+
     // Header: panjang source (3 byte little-endian)
     rawBytecode.push(sourceBytes.length & 0xFF);
     rawBytecode.push((sourceBytes.length >> 8) & 0xFF);
@@ -103,7 +105,6 @@ function obfuscate(source) {
         rawBytecode.push(sourceBytes[i]);
     }
 
-    // BUILD_STRING, EXECUTE, HALT
     rawBytecode.push(OP_BUILD_STRING);
     rawBytecode.push(OP_EXECUTE);
     rawBytecode.push(OP_HALT);
@@ -117,11 +118,11 @@ function obfuscate(source) {
         return (b ^ key[i % KEY_LEN]) & 0xFF;
     });
 
-    // ─── Verifikasi ketat: pastikan dekripsi mengembalikan nilai asli ───
+    // Verifikasi ganda
     for (let i = 0; i < rawBytecode.length; i++) {
         const decrypted = (encryptedBytecode[i] ^ key[i % KEY_LEN]) & 0xFF;
         if (decrypted !== rawBytecode[i]) {
-            throw new Error(`Encryption verification failed at index ${i}: expected ${rawBytecode[i]}, got ${decrypted}`);
+            throw new Error(`Encryption verification failed at index ${i}`);
         }
     }
 
@@ -137,11 +138,10 @@ function obfuscate(source) {
         `local ${D[i]} = {${arr}}\nlocal ${D[i + 8]} = #${D[i]} + ${Math.floor(Math.random() * 100)}`
     ).join('\n');
 
-    // ─── Susun output Lua ───
     const keyStr = key.join(',');
     const bytecodeStr = encryptedBytecode.join(',');
 
-    const lua = `-- Mawww Obfuscator v13.0 | Stable Custom VM
+    const lua = `-- Mawww Obfuscator v14.0 | Stable Custom VM
 -- Generated: ${new Date().toISOString()}
 -- DO NOT EDIT
 
@@ -171,7 +171,6 @@ else
     end
 end
 
--- XOR function (handles negative values correctly)
 local ${V.xor_func}
 if ${V.bit_lib} then
     local b = ${V.bit_lib}.bxor
@@ -192,26 +191,26 @@ else
     end
 end
 
--- Data terenkripsi
 local ${V.vm_bytecode} = {${bytecodeStr}}
 local ${V.vm_key} = {${keyStr}}
 
--- Loadstring detection
 local ${V.loadstr} = loadstring
 if type(${V.loadstr}) ~= "function" then ${V.loadstr} = load end
 if type(${V.loadstr}) ~= "function" then error("[Mawww] No loadstring") end
 
--- Dekripsi bytecode (XOR satu lapis, reversibel)
-local decrypted = {}
+local ${V.decrypted} = {}
 for i = 1, #${V.vm_bytecode} do
     local v = ${V.xor_func}(${V.vm_bytecode}[i], ${V.vm_key}[(i - 1) % 64 + 1])
-    -- Handle negative values correctly
-    decrypted[i] = v % 256
-    if decrypted[i] < 0 then decrypted[i] = decrypted[i] + 256 end
+    ${V.decrypted}[i] = v % 256
+    if ${V.decrypted}[i] < 0 then ${V.decrypted}[i] = ${V.decrypted}[i] + 256 end
 end
 
--- VM Runtime
-local ${V.vm_pc} = 1
+-- Verifikasi magic byte
+if ${V.decrypted}[1] ~= 170 then
+    error("[Mawww] Magic byte mismatch: " .. tostring(${V.decrypted}[1]))
+end
+
+local ${V.vm_pc} = 2 -- Lewati magic byte
 local ${V.vm_stack} = {}
 local ${V.vm_output} = nil
 
@@ -220,12 +219,12 @@ local OP_BUILD_STRING = ${OP_BUILD_STRING}
 local OP_EXECUTE = ${OP_EXECUTE}
 local OP_HALT = ${OP_HALT}
 
-while ${V.vm_pc} <= #decrypted do
-    local opcode = decrypted[${V.vm_pc}]
+while ${V.vm_pc} <= #${V.decrypted} do
+    local opcode = ${V.decrypted}[${V.vm_pc}]
     ${V.vm_pc} = ${V.vm_pc} + 1
 
     if opcode == OP_PUSH_BYTE then
-        local operand = decrypted[${V.vm_pc}]
+        local operand = ${V.decrypted}[${V.vm_pc}]
         ${V.vm_pc} = ${V.vm_pc} + 1
         ${V.vm_stack}[#${V.vm_stack} + 1] = operand
 
@@ -358,5 +357,5 @@ app.get('*', (req, res) => {
 
 // ===== Listen =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v13.0 (Stable VM) running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v14.0 (Stable VM) running on 0.0.0.0:${PORT}`);
 });
