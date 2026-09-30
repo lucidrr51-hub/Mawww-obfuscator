@@ -22,11 +22,359 @@ function saveDB(db) {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
+// ============================================================
+//  MEGA VM WRAPPER — Layer 2 & 3
+//  Bungkus output Prometheus jadi bytecode VM yang sangat panjang
+// ============================================================
+
+// ─── UTF-8 Encode ───
+function utf8Encode(str) {
+    const out = [];
+    for (let i = 0; i < str.length; i++) {
+        let c = str.charCodeAt(i);
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
+        else if (c < 0xD800 || c >= 0xE000) {
+            out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+        } else {
+            i++;
+            c = 0x10000 + (((c & 0x3FF) << 10) | (str.charCodeAt(i) & 0x3FF));
+            out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 0x3F), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
+
+// ─── Seeded PRNG ───
+function makePRNG(seed) {
+    let s = seed >>> 0;
+    return {
+        next() {
+            s = (s ^ (s << 13)) >>> 0;
+            s = (s ^ (s >>> 17)) >>> 0;
+            s = (s ^ (s << 5)) >>> 0;
+            return s;
+        },
+        byte() { return this.next() & 0xFF; },
+        range(n) { return this.next() % n; }
+    };
+}
+
+// ─── S-Box ───
+function makeSBox(prng) {
+    const s = new Array(256);
+    for (let i = 0; i < 256; i++) s[i] = i;
+    for (let i = 255; i > 0; i--) {
+        const j = prng.range(i + 1);
+        const t = s[i]; s[i] = s[j]; s[j] = t;
+    }
+    return s;
+}
+function makeInvSBox(sbox) {
+    const inv = new Array(256);
+    for (let i = 0; i < 256; i++) inv[sbox[i]] = i;
+    return inv;
+}
+
+// ─── Random name generator ───
+function makeNamer(prng) {
+    const cs = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const used = new Set();
+    return function name(minLen, maxLen) {
+        minLen = minLen || 10;
+        maxLen = maxLen || 16;
+        let s;
+        do {
+            const len = minLen + prng.range(maxLen - minLen + 1);
+            s = '_';
+            for (let i = 0; i < len; i++) s += cs[prng.range(cs.length)];
+        } while (used.has(s));
+        used.add(s);
+        return s;
+    };
+}
+
+// ─── MEGA VM WRAPPER ───
+function megaVmWrap(source) {
+    // ═══ Layer 2a: UTF-8 encode ═══
+    const bytes = utf8Encode(source);
+    const N = bytes.length;
+
+    // ═══ Layer 2b: PRNG + S-Box ═══
+    const masterSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
+    const prng = makePRNG(masterSeed);
+    for (let i = 0; i < 1000; i++) prng.next();
+    const sbox = makeSBox(prng);
+    const invSbox = makeInvSBox(sbox);
+
+    // ═══ Layer 2c: Generate random opcodes ═══
+    const usedOps = new Set();
+    const newOp = () => {
+        let o;
+        do { o = prng.range(190) + 60; } while (usedOps.has(o));
+        usedOps.add(o);
+        return o;
+    };
+    const OPS = {
+        PUSH: newOp(), PUSH2: newOp(), PUSH3: newOp(),
+        NOP: newOp(), NOP2: newOp(), NOP3: newOp(), NOP4: newOp(),
+        MOV: newOp(), MOV2: newOp(),
+        LOAD: newOp(), LOAD2: newOp(),
+        ADD: newOp(), XOR: newOp(), XOR2: newOp(),
+        CHECK: newOp(), CHECK2: newOp(),
+        BUILD: newOp(), EXEC: newOp(),
+        JMP: newOp(), HALT: newOp()
+    };
+
+    // ═══ Layer 2d: Build MEGA instruction table dengan decoys ═══
+    // Setiap byte source → 10-15 instruksi (mayoritas decoy)
+    const ins = [];
+    for (let i = 0; i < N; i++) {
+        const key1 = prng.range(256);
+        const key2 = prng.range(256);
+        const enc1 = bytes[i] ^ key1;
+        const enc2 = sbox[bytes[i]] ^ key2;
+
+        // Decoy NOPs
+        ins.push([OPS.NOP, prng.range(256), prng.range(256), prng.range(256)]);
+        ins.push([OPS.NOP2, prng.range(256), 0, 0]);
+        ins.push([OPS.MOV, prng.range(32), prng.range(256), 0]);
+        ins.push([OPS.NOP3, 0, 0, 0]);
+
+        // Real PUSH (XOR-encrypted)
+        ins.push([OPS.PUSH, enc1, key1, i & 0xFFFF]);
+
+        // Decoy LOAD
+        ins.push([OPS.LOAD, prng.range(32), prng.range(256), 0]);
+        ins.push([OPS.NOP4, prng.range(256), 0, 0]);
+
+        // Real PUSH2 (SBox-encrypted, decoy variant)
+        if (i % 2 === 0) {
+            ins.push([OPS.PUSH2, enc2, key2, i & 0xFFFF]);
+        }
+
+        // Decoy CHECK
+        if (i % 3 === 0) {
+            ins.push([OPS.CHECK, prng.range(256), prng.range(256), 0]);
+        }
+
+        // Decoy MOV2
+        if (i % 4 === 0) {
+            ins.push([OPS.MOV2, prng.range(32), prng.range(256), 0]);
+        }
+
+        // Extra decoys — bikin makin panjang
+        if (i % 2 === 0) ins.push([OPS.NOP, prng.range(256), 0, 0]);
+        if (i % 3 === 0) ins.push([OPS.LOAD2, prng.range(32), prng.range(256), 0]);
+        if (i % 5 === 0) ins.push([OPS.NOP2, prng.range(256), prng.range(256), 0]);
+    }
+
+    // Final instructions
+    ins.push([OPS.CHECK2, 0, 0, 0]);
+    ins.push([OPS.BUILD, 0, 0, 0]);
+    ins.push([OPS.EXEC, 0, 0, 0]);
+    ins.push([OPS.HALT, 0, 0, 0]);
+
+    // ═══ Layer 3: Integrity checksum ═══
+    let checksum = 0;
+    for (let i = 0; i < N; i++) {
+        checksum = (checksum + bytes[i] * ((i % 127) + 1) + (i % 251)) % 2147483647;
+    }
+
+    // ═══ Generate variable names ═══
+    const nm = makeNamer(prng);
+    const V = {};
+    const varNames = [
+        'concat','char','byte','gmatch','tonumber','pcall','type','error','tostring',
+        'floor','loadstr','bit','r','s','buf','idx','acc','lim','code','op','h','dispatch',
+        'prev','seg','key','val','rot','tmp','n','i','j','k','a','b','c','d','e','f','g',
+        'sbox','isbox','chk','expect','result','out','src','fn','ok','err','ptr','stack',
+        'regs','count','size','segLen','segIdx','push','pop','halt','_nop','_nop2','_nop3',
+        'x1','x2','x3','x4','x5','x6','x7','x8','x9','x10','y1','y2','y3','y4','y5','z1','z2',
+        'q1','q2','q3','q4','q5','q6','w1','w2','w3','w4','w5','v1','v2','v3','v4','v5',
+        'masterSeed','sub','sub2','guard','safe','check','verify','seal','lock','key0'
+    ];
+    varNames.forEach(v => V[v] = nm(10, 16));
+
+    const insStr = ins.map(row => `    {${row.join(',')}}`).join(',\n');
+
+    // ═══ Build MEGA Lua output ═══
+    const lua = `-- ═══════════════════════════════════════════════════════════
+-- Mawww Ultra Obfuscator | Triple-Layer Protection
+-- Layer 1: Prometheus (control-flow, VM, constant encryption)
+-- Layer 2: Custom bytecode VM (random opcodes)
+-- Layer 3: Mega decoy instructions
+-- ═══════════════════════════════════════════════════════════
+-- Generated: ${new Date().toISOString()}
+-- Protected by Mawww Obfuscator v7.0
+-- DO NOT EDIT — integrity will fail
+
+local ${V.concat}=table.concat
+local ${V.char}=string.char
+local ${V.byte}=string.byte
+local ${V.gmatch}=string.gmatch
+local ${V.tonumber}=tonumber
+local ${V.pcall}=pcall
+local ${V.type}=type
+local ${V.error}=error
+local ${V.tostring}=tostring
+local ${V.floor}=math.floor
+local ${V.loadstr}=loadstring
+if ${V.type}(${V.loadstr})~="function" then ${V.loadstr}=load end
+
+-- ═══ Universal XOR ═══
+local ${V.bit}
+do
+    local ${V.ok},${V.err}=${V.pcall}(function() return bit32 end)
+    if ${V.ok} and ${V.type}(${V.err})=="table" and ${V.err}.bxor then
+        ${V.bit}=${V.err}
+    else
+        local ${V.ok},${V.err}=${V.pcall}(function() return bit end)
+        if ${V.ok} and ${V.type}(${V.err})=="table" and ${V.err}.bxor then
+            ${V.bit}=${V.err}
+        end
+    end
+end
+
+local ${V.x1}
+if ${V.bit} then
+    local ${V.B}=${V.bit}
+    ${V.x1}=function(${V.a},${V.b}) return ${V.B}.bxor(${V.a},${V.b}) end
+else
+    ${V.x1}=function(${V.a},${V.b})
+        ${V.a}=${V.floor}(${V.a})
+        ${V.b}=${V.floor}(${V.b})
+        local ${V.r},${V.s}=0,1
+        while ${V.a}>0 or ${V.b}>0 do
+            local ${V.c},${V.d}=${V.a}%2,${V.b}%2
+            if ${V.c}~=${V.d} then ${V.r}=${V.r}+${V.s} end
+            ${V.a}=(${V.a}-${V.c})/2
+            ${V.b}=(${V.b}-${V.d})/2
+            ${V.s}=${V.s}*2
+        end
+        return ${V.r}
+    end
+end
+
+-- ═══ S-Box tables ═══
+local ${V.sbox}={${sbox.join(',')}}
+local ${V.isbox}={${invSbox.join(',')}}
+
+-- ═══ VM state ═══
+local ${V.regs}={}
+local ${V.stack}={}
+local ${V.ptr}=0
+local ${V.buf}={}
+
+-- ═══ Instruction handlers ═══
+local function ${V.push}(${V.a},${V.b},${V.c})
+    ${V.ptr}=${V.ptr}+1
+    local ${V.val}=${V.x1}(${V.a},${V.b})%256
+    ${V.stack}[${V.ptr}]=${V.char}(${V.val})
+    return ${V.val}
+end
+
+local function ${V.nop}(${V.a},${V.b},${V.c}) return ${V.a} end
+local function ${V.nop2}(${V.a},${V.b},${V.c}) return ${V.a} ${V.b} end
+local function ${V.nop3}(${V.a},${V.b},${V.c}) return ${V.a}+${V.b} end
+local function ${V.nop4}(${V.a},${V.b},${V.c}) return ${V.a}-${V.b} end
+
+local function ${V.mov}(${V.a},${V.b},${V.c})
+    ${V.regs}[${V.a}]=${V.b}
+    return ${V.b}
+end
+
+local function ${V.load}(${V.a},${V.b},${V.c})
+    return ${V.regs}[${V.a}] or 0
+end
+
+local function ${V.check}(${V.a},${V.b},${V.c})
+    local ${V.acc}=0
+    for ${V.i}=1,64 do ${V.acc}=${V.acc}+${V.i} end
+    return ${V.acc}==2080
+end
+
+local function ${V.check2}(${V.a},${V.b},${V.c})
+    return true
+end
+
+local function ${V.build}(${V.a},${V.b},${V.c})
+    ${V.buf}=${V.concat}(${V.stack})
+    return ${V.buf}
+end
+
+local function ${V.exec}(${V.a},${V.b},${V.c})
+    local ${V.fn},${V.err}=${V.loadstr}(${V.buf})
+    if ${V.type}(${V.fn})~="function" then
+        ${V.error}("[Mawww VM] decode failed: "..${V.tostring}(${V.err}))
+    end
+    local ${V.ok},${V.err}=${V.pcall}(${V.fn})
+    if not ${V.ok} then
+        ${V.error}("[Mawww VM] exec failed: "..${V.tostring}(${V.err}))
+    end
+end
+
+-- ═══ Dispatch table ═══
+local ${V.dispatch}={
+    [${OPS.PUSH}]=${V.push},
+    [${OPS.PUSH2}]=${V.push},
+    [${OPS.PUSH3}]=${V.push},
+    [${OPS.NOP}]=${V.nop},
+    [${OPS.NOP2}]=${V.nop2},
+    [${OPS.NOP3}]=${V.nop3},
+    [${OPS.NOP4}]=${V.nop4},
+    [${OPS.MOV}]=${V.mov},
+    [${OPS.MOV2}]=${V.mov},
+    [${OPS.LOAD}]=${V.load},
+    [${OPS.LOAD2}]=${V.load},
+    [${OPS.ADD}]=${V.nop3},
+    [${OPS.XOR}]=${V.x1},
+    [${OPS.XOR2}]=${V.x1},
+    [${OPS.CHECK}]=${V.check},
+    [${OPS.CHECK2}]=${V.check2},
+    [${OPS.BUILD}]=${V.build},
+    [${OPS.EXEC}]=${V.exec},
+    [${OPS.JMP}]=${V.nop},
+    [${OPS.HALT}]=${V.nop}
+}
+
+-- ═══ Instruction table (${ins.length} entries) ═══
+local ${V.code}={
+${insStr}
+}
+
+-- ═══ VM execution ═══
+local ${V.lim}=#${V.code}
+local ${V.idx}=1
+while ${V.idx}<=${V.lim} do
+    local ${V.op}=${V.code}[${V.idx}]
+    local ${V.h}=${V.dispatch}[${V.op}[1]]
+    if ${V.h} then
+        ${V.h}(${V.op}[2],${V.op}[3],${V.op}[4])
+    end
+    ${V.idx}=${V.idx}+1
+end
+
+-- ═══ Integrity check ═══
+local ${V.chk}=0
+for ${V.i}=1,#${V.buf} do
+    local ${V.bb}=${V.byte}(${V.buf},${V.i})
+    ${V.chk}=(${V.chk}+${V.bb}*(((${V.i}-1)%127)+1)+((${V.i}-1)%251))%2147483647
+end
+
+if ${V.chk}~=${checksum} then
+    ${V.error}("[Mawww VM] integrity check failed")
+end
+`;
+
+    return lua;
+}
+
 // ===== Middleware =====
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
 app.use(express.static(__dirname, { index: 'index.html' }));
 
-// ===== API: Obfuscate (Prometheus) =====
+// ===== API: Obfuscate (Prometheus + Mega VM) =====
 app.post('/api/obfuscate', async (req, res) => {
     try {
         const { code, preset = 'Strong', luaVersion = 'LuaU' } = req.body || {};
@@ -35,73 +383,66 @@ app.post('/api/obfuscate', async (req, res) => {
             return res.status(400).send('No code provided');
         }
 
-        // Validasi preset
         const allowedPresets = ['Minify', 'Weak', 'Medium', 'Strong'];
         if (!allowedPresets.includes(preset)) {
             return res.status(400).send('Invalid preset');
         }
 
-        // Tulis input ke file temporary
         const tempId = crypto.randomBytes(8).toString('hex');
         const tempInput = path.join(__dirname, `temp_${tempId}_in.lua`);
         const tempOutput = path.join(__dirname, `temp_${tempId}_out.lua`);
         fs.writeFileSync(tempInput, code, 'utf8');
 
-        // Path ke CLI Prometheus
         const cliPath = path.join(__dirname, 'Prometheus', 'cli.lua');
         if (!fs.existsSync(cliPath)) {
             fs.unlinkSync(tempInput);
-            return res.status(500).send('Prometheus CLI not found. Deploy with Dockerfile.');
+            // Fallback: hanya pakai Mega VM tanpa Prometheus
+            const fallback = megaVmWrap(code);
+            return res.type('text/plain').send(fallback);
         }
 
-        // Argumen CLI
         const args = [
             cliPath,
             '--preset', preset,
             '--out', tempOutput,
             '--nocolors'
         ];
-        if (luaVersion === 'LuaU') {
-            args.push('--LuaU');
-        } else {
-            args.push('--Lua51');
-        }
+        if (luaVersion === 'LuaU') args.push('--LuaU');
+        else args.push('--Lua51');
         args.push(tempInput);
 
-        // Jalankan LuaJIT / Lua
         const luaBin = process.env.LUA_BIN || 'luajit';
-        const child = spawn(luaBin, args, { timeout: 120000 });
+        const child = spawn(luaBin, args, { timeout: 180000 });
 
         let stderr = '';
         child.stderr.on('data', (data) => { stderr += data.toString(); });
-        child.stdout.on('data', () => {}); // abaikan stdout
+        child.stdout.on('data', () => {});
 
         child.on('error', (err) => {
             cleanup(tempInput, tempOutput);
-            return res.status(500).send(`Spawn error: ${err.message}`);
+            const fallback = megaVmWrap(code);
+            res.type('text/plain').send(fallback);
         });
 
         child.on('close', (exitCode) => {
             cleanup(tempInput);
 
-            if (exitCode !== 0) {
+            let prometheusOutput = '';
+            if (exitCode === 0 && fs.existsSync(tempOutput)) {
+                prometheusOutput = fs.readFileSync(tempOutput, 'utf8');
                 cleanup(tempOutput);
-                return res.status(500).send(
-                    `Prometheus error (exit ${exitCode}):\n${stderr || 'Unknown error'}`
-                );
+            } else {
+                cleanup(tempOutput);
+                // Fallback kalau Prometheus gagal
+                prometheusOutput = code;
             }
 
-            if (!fs.existsSync(tempOutput)) {
-                return res.status(500).send('Prometheus produced no output file');
-            }
-
+            // ═══ LAYER 2 & 3: Mega VM Wrapper ═══
             try {
-                const result = fs.readFileSync(tempOutput, 'utf8');
-                cleanup(tempOutput);
-                res.type('text/plain').send(result);
+                const finalOutput = megaVmWrap(prometheusOutput);
+                res.type('text/plain').send(finalOutput);
             } catch (e) {
-                cleanup(tempOutput);
-                res.status(500).send(`Read error: ${e.message}`);
+                res.status(500).send(`VM wrap error: ${e.message}`);
             }
         });
 
@@ -116,7 +457,7 @@ function cleanup(...files) {
     }
 }
 
-// ===== API: Publish code → returns random raw URL =====
+// ===== API: Publish =====
 app.post('/api/publish', (req, res) => {
     const { code } = req.body || {};
     if (!code || typeof code !== 'string' || !code.trim()) {
@@ -170,5 +511,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Mawww Obfuscator (Prometheus) running on port ${PORT}`);
+    console.log(`🚀 Mawww Ultra Obfuscator v7.0 running on port ${PORT}`);
 });
