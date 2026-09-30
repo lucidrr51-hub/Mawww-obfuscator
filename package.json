@@ -1,7 +1,7 @@
 {
   "name": "mawww-obfuscator",
-  "version": "7.0.0",
-  "description": "Mawww Ultra Obfuscator — Prometheus + Custom VM",
+  "version": "8.0.0",
+  "description": "Mawww Ultra Obfuscator — Mega VM Protection",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
