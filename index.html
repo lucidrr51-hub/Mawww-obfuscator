@@ -45,7 +45,6 @@
             <input type="file" id="fileInput" accept=".lua,.txt,.luau" style="display:none;">
 
             <div class="panels-grid">
-                <!-- Input Panel -->
                 <div class="panel">
                     <div class="panel-header">
                         <span class="panel-label">Input Lua</span>
@@ -73,7 +72,6 @@
                     </div>
                 </div>
 
-                <!-- Output Panel -->
                 <div class="panel">
                     <div class="panel-header">
                         <span class="panel-label">Obfuscated Output</span>
@@ -102,15 +100,13 @@
                 </div>
             </div>
 
-            <!-- Action Buttons with Preset -->
             <div class="actions-row">
                 <div class="preset-selector">
-                    <label for="presetSelect">Preset:</label>
+                    <label for="presetSelect">Preset</label>
                     <select id="presetSelect">
-                        <option value="Strong" selected>Strong (Max Protection)</option>
+                        <option value="Strong" selected>Strong (Max)</option>
                         <option value="Medium">Medium</option>
                         <option value="Weak">Weak</option>
-                        <option value="Minify">Minify</option>
                     </select>
                 </div>
                 <button class="btn btn-primary" id="obfuscateBtn">
@@ -131,7 +127,6 @@
 
             <div class="status-message" id="statusMessage"></div>
 
-            <!-- Raw Loadstring Result -->
             <div class="raw-section" id="rawSection" style="display:none;">
                 <div class="panel-header">
                     <span class="panel-label">
@@ -157,9 +152,9 @@
                     </div>
                 </div>
                 <div class="raw-output">
-                    <div class="raw-label">Raw URL (acak, auto-generated):</div>
+                    <div class="raw-label">Raw URL (acak, auto-generated)</div>
                     <div class="raw-url" id="rawUrlDisplay">—</div>
-                    <div class="raw-label">Loadstring (paste ini ke executor):</div>
+                    <div class="raw-label">Loadstring (paste ini ke executor)</div>
                     <textarea id="loadstringOutput" class="loadstring-textarea" readonly spellcheck="false"></textarea>
                 </div>
             </div>
@@ -172,4 +167,4 @@
 
     <script src="/script.js"></script>
 </body>
-    </html>
+</html>
