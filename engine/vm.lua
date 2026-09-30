@@ -9,16 +9,13 @@ local function runVM(proto, upvals, env, varargs)
     local Reg = {}
     local PC = 1
 
-    -- Decrypt string constants (they were passed base64'd from JS)
-    -- K may contain {__enc = "...base64..."} entries
     for i = 1, #K do
         local k = K[i]
         if type(k) == "table" and k.__enc then
-            K[i] = k.__enc  -- already decrypted server-side or decrypt here if needed
+            K[i] = k.__enc
         end
     end
 
-    -- varargs
     varargs = varargs or {}
 
     local function makeClosure(protoIdx)
@@ -59,10 +56,6 @@ local function runVM(proto, upvals, env, varargs)
             return
         end
         error("attempt to index " .. type(obj), 2)
-    end
-
-    local function arith(op, a, b)
-        return op(a, b)
     end
 
     local function doCall(base, nargs, nret)
