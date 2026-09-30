@@ -34,13 +34,13 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // ============================================================
-//  ULTRA OBFUSCATOR v11.0 — Virtual Machine & Encryption
-//  - Custom VM dengan random opcodes
-//  - Multi-layer XOR + S-Box encryption
-//  - Control Flow Flattening (via VM)
-//  - Anti-Debugging & Anti-Tamper (timing checks)
-//  - String & constant encryption
-//  - Dead code injection
+//  ULTRA OBFUSCATOR v12.0 — Custom VM (Fixed & Robust)
+//  - Custom VM dengan random opcodes (unik per obfuscate)
+//  - Enkripsi bytecode: XOR satu lapis dengan kunci berotasi
+//    (dijamin reversibel, tidak akan menghasilkan opcode invalid)
+//  - Decoy arrays & dead code
+//  - Anti-debug timing check (aman untuk Delta)
+//  - Kompatibel penuh dengan Delta, Synapse, Krnl, Fluxus, dll.
 // ============================================================
 
 function makeNameGenerator() {
@@ -57,135 +57,114 @@ function makeNameGenerator() {
     };
 }
 
-// Helper: Generate S-Box and Inverse S-Box
-function generateSBox() {
-    const sbox = [];
-    for (let i = 0; i < 256; i++) sbox.push(i);
-    for (let i = 255; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [sbox[i], sbox[j]] = [sbox[j], sbox[i]];
-    }
-    const invSbox = [];
-    for (let i = 0; i < 256; i++) invSbox[sbox[i]] = i;
-    return { sbox, invSbox };
-}
-
-// Helper: Generate multiple encryption keys
-function generateKeys(count, length) {
-    const keys = [];
-    for (let k = 0; k < count; k++) {
-        const key = [];
-        for (let i = 0; i < length; i++) key.push(Math.floor(Math.random() * 256));
-        keys.push(key);
-    }
-    return keys;
-}
-
 function obfuscate(source) {
     const nm = makeNameGenerator();
 
-    // ─── 1. Setup Names for Lua Variables ───
+    // ─── Nama variabel acak ───
     const V = {};
     const baseNames = [
-        'vm_loader', 'vm_opcodes', 'vm_bytecode', 'vm_sbox', 'vm_inv_sbox',
-        'vm_keys', 'vm_register', 'vm_pc', 'vm_stack', 'vm_constants',
-        'anti_debug_check', 'decrypt_string', 'load_bytecode',
-        'xor_func', 'bit_lib', 'pcall_func', 'type_func', 'tostring_func'
+        'vm_loader', 'vm_opcodes', 'vm_bytecode', 'vm_key', 'vm_keylen',
+        'vm_pc', 'vm_stack', 'vm_output', 'anti_debug', 'xor_func',
+        'bit_lib', 'loadstr', 'pcall_fn', 'type_fn', 'tostring_fn',
+        'char_fn', 'concat_fn', 'sbox_table', 'inv_sbox_table'
     ];
     baseNames.forEach(k => V[k] = nm());
 
     const D = []; // Decoy names
-    for (let i = 0; i < 30; i++) D.push(nm());
+    for (let i = 0; i < 25; i++) D.push(nm());
 
-    // ─── 2. Compile to Custom Bytecode ───
-    // (Sederhananya: konversi source ke byte array, lalu ke instruksi VM)
+    // ─── Konversi source ke byte ───
     const sourceBytes = Buffer.from(source, 'utf8');
-    const bytecode = [];
 
-    // Header: VM version, number of constants, etc.
-    bytecode.push(0x01); // Version
-    bytecode.push(sourceBytes.length & 0xFF);
-    bytecode.push((sourceBytes.length >> 8) & 0xFF);
-    bytecode.push((sourceBytes.length >> 16) & 0xFF);
+    // ─── Buat opcode acak ───
+    // Pastikan semua opcode unik dan dalam rentang aman (60-250)
+    const usedOps = new Set();
+    const newOp = () => {
+        let o;
+        do { o = Math.floor(Math.random() * 190) + 60; } while (usedOps.has(o));
+        usedOps.add(o);
+        return o;
+    };
 
-    // Body: Push each byte as an instruction (very basic VM)
-    // Opcode 1: PUSH_BYTE (expects one operand)
-    const PUSH_BYTE_OP = Math.floor(Math.random() * 200) + 50;
+    const OP_PUSH_BYTE = newOp();
+    const OP_BUILD_STRING = newOp();
+    const OP_EXECUTE = newOp();
+    const OP_HALT = newOp();
+
+    // ─── Bangun bytecode mentah ───
+    const rawBytecode = [];
+
+    // Header: panjang source (3 byte little-endian)
+    rawBytecode.push(sourceBytes.length & 0xFF);
+    rawBytecode.push((sourceBytes.length >> 8) & 0xFF);
+    rawBytecode.push((sourceBytes.length >> 16) & 0xFF);
+
+    // Body: PUSH_BYTE untuk setiap byte source
     for (let i = 0; i < sourceBytes.length; i++) {
-        bytecode.push(PUSH_BYTE_OP);
-        bytecode.push(sourceBytes[i]);
+        rawBytecode.push(OP_PUSH_BYTE);
+        rawBytecode.push(sourceBytes[i]);
     }
 
-    // Opcode 2: BUILD_STRING
-    const BUILD_STRING_OP = Math.floor(Math.random() * 200) + 50;
-    bytecode.push(BUILD_STRING_OP);
+    // BUILD_STRING, EXECUTE, HALT
+    rawBytecode.push(OP_BUILD_STRING);
+    rawBytecode.push(OP_EXECUTE);
+    rawBytecode.push(OP_HALT);
 
-    // Opcode 3: EXECUTE
-    const EXECUTE_OP = Math.floor(Math.random() * 200) + 50;
-    bytecode.push(EXECUTE_OP);
+    // ─── Enkripsi bytecode (XOR satu lapis, reversibel) ───
+    // Kunci: 64 byte acak
+    const KEY_LEN = 64;
+    const key = [];
+    for (let i = 0; i < KEY_LEN; i++) key.push(Math.floor(Math.random() * 256));
 
-    // Opcode 4: HALT
-    const HALT_OP = Math.floor(Math.random() * 200) + 50;
-    bytecode.push(HALT_OP);
-
-    // ─── 3. Encrypt Bytecode (Multi-Layer XOR + S-Box) ───
-    const { sbox, invSbox } = generateSBox();
-    const numLayers = 4;
-    const keyLength = 32;
-    const keys = generateKeys(numLayers, keyLength);
-
-    const encryptedBytecode = bytecode.map((b, i) => {
-        let v = b;
-        for (let layer = 0; layer < numLayers; layer++) {
-            v = v ^ keys[layer][i % keyLength];
-            v = sbox[v % 256];
-        }
-        return v;
+    const encryptedBytecode = rawBytecode.map((b, i) => {
+        return (b ^ key[i % KEY_LEN]) & 0xFF;
     });
 
-    // ─── 4. Generate Lua VM Runtime ───
-    const sboxStr = sbox.join(',');
-    const invSboxStr = invSbox.join(',');
-    const keysStr = keys.map(k => `{${k.join(',')}}`).join(',\n    ');
-    const encryptedBytecodeStr = encryptedBytecode.join(',');
+    // ─── Verifikasi: pastikan dekripsi mengembalikan nilai asli ───
+    const verify = encryptedBytecode.map((b, i) => {
+        return (b ^ key[i % KEY_LEN]) & 0xFF;
+    });
+    for (let i = 0; i < rawBytecode.length; i++) {
+        if (verify[i] !== rawBytecode[i]) {
+            throw new Error('Encryption verification failed at ' + i);
+        }
+    }
 
-    // ─── 5. Generate Decoy Arrays (Dead Code) ───
+    // ─── Decoy arrays ───
     const decoyArrays = [];
-    for (let d = 0; d < 10; d++) {
-        const size = 50 + Math.floor(Math.random() * 100);
+    for (let d = 0; d < 8; d++) {
+        const size = 40 + Math.floor(Math.random() * 60);
         const arr = [];
         for (let i = 0; i < size; i++) arr.push(Math.floor(Math.random() * 256));
         decoyArrays.push(arr.join(','));
     }
     const decoyCode = decoyArrays.map((arr, i) =>
-        `local ${D[i]} = {${arr}}\nlocal ${D[i + 10]} = #${D[i]} + ${Math.floor(Math.random() * 100)}`
+        `local ${D[i]} = {${arr}}\nlocal ${D[i + 8]} = #${D[i]} + ${Math.floor(Math.random() * 100)}`
     ).join('\n');
 
-    // ─── 6. Build Final Lua Output ───
-    const lua = `-- Mawww Obfuscator v11.0 | Custom VM & Encryption
+    // ─── Susun output Lua ───
+    const keyStr = key.join(',');
+    const bytecodeStr = encryptedBytecode.join(',');
+
+    const lua = `-- Mawww Obfuscator v12.0 | Custom VM (Fixed)
 -- Generated: ${new Date().toISOString()}
 -- DO NOT EDIT
 
 ${decoyCode}
 
--- Anti-Debugging: Timing Check
-local ${V.anti_debug_check} = (function()
-    local start = os.clock()
-    for i = 1, 1000 do end
-    local elapsed = os.clock() - start
-    -- Jika eksekusi terlalu lambat, kemungkinan sedang di-debug
-    if elapsed > 0.01 then
-        return false
-    end
-    return true
+-- Anti-Debug: timing check (aman untuk Delta)
+local ${V.anti_debug} = (function()
+    local t0 = os.clock()
+    for i = 1, 500 do local x = i * 2 end
+    local t1 = os.clock() - t0
+    return t1 < 0.05
 end)()
 
-if not ${V.anti_debug_check} then
-    -- Beri hasil yang salah atau berhenti
+if not ${V.anti_debug} then
     error("Debugging detected")
 end
 
--- Bit Library Detection
+-- Bit library detection
 local ${V.bit_lib}
 local ok, lib = pcall(function() return bit32 end)
 if ok and type(lib) == "table" and lib.bxor then
@@ -217,75 +196,75 @@ else
     end
 end
 
--- Embedded Encrypted Data
-local ${V.vm_sbox} = {${sboxStr}}
-local ${V.vm_inv_sbox} = {${invSboxStr}}
-local ${V.vm_keys} = {
-    ${keysStr}
-}
-local ${V.vm_bytecode} = {${encryptedBytecodeStr}}
+-- Data terenkripsi
+local ${V.vm_bytecode} = {${bytecodeStr}}
+local ${V.vm_key} = {${keyStr}}
 
--- ─── VM Runtime ───
-local ${V.vm_register} = {}
-local ${V.vm_pc} = 1
-local ${V.vm_stack} = {}
+-- Loadstring detection
+local ${V.loadstr} = loadstring
+if type(${V.loadstr}) ~= "function" then ${V.loadstr} = load end
+if type(${V.loadstr}) ~= "function" then error("[Mawww] No loadstring") end
 
-local ${V.vm_opcodes} = {
-    PUSH_BYTE = ${PUSH_BYTE_OP},
-    BUILD_STRING = ${BUILD_STRING_OP},
-    EXECUTE = ${EXECUTE_OP},
-    HALT = ${HALT_OP}
-}
-
-local ${V.vm_loader} = loadstring
-if type(${V.vm_loader}) ~= "function" then ${V.vm_loader} = load end
-if type(${V.vm_loader}) ~= "function" then error("[Mawww] No loadstring") end
-
--- Decrypt bytecode
-local decryptedBytecode = {}
+-- Dekripsi bytecode (XOR satu lapis, reversibel)
+local decrypted = {}
 for i = 1, #${V.vm_bytecode} do
-    local v = ${V.vm_bytecode}[i]
-    for layer = 4, 1, -1 do
-        v = ${V.vm_inv_sbox}[v + 1]
-        v = ${V.xor_func}(v, ${V.vm_keys}[layer][(i - 1) % 32 + 1])
-    end
-    decryptedBytecode[i] = v % 256
+    decrypted[i] = ${V.xor_func}(${V.vm_bytecode}[i], ${V.vm_key}[(i - 1) % 64 + 1]) % 256
 end
 
--- Execute VM
-local outputBuffer = {}
-while ${V.vm_pc} <= #decryptedBytecode do
-    local opcode = decryptedBytecode[${V.vm_pc}]
+-- VM Runtime
+local ${V.vm_pc} = 1
+local ${V.vm_stack} = {}
+local ${V.vm_output} = nil
+
+-- Opcode constants
+local OP_PUSH_BYTE = ${OP_PUSH_BYTE}
+local OP_BUILD_STRING = ${OP_BUILD_STRING}
+local OP_EXECUTE = ${OP_EXECUTE}
+local OP_HALT = ${OP_HALT}
+
+while ${V.vm_pc} <= #decrypted do
+    local opcode = decrypted[${V.vm_pc}]
     ${V.vm_pc} = ${V.vm_pc} + 1
 
-    if opcode == ${V.vm_opcodes}.PUSH_BYTE then
-        local operand = decryptedBytecode[${V.vm_pc}]
+    if opcode == OP_PUSH_BYTE then
+        local operand = decrypted[${V.vm_pc}]
         ${V.vm_pc} = ${V.vm_pc} + 1
-        table.insert(${V.vm_stack}, operand)
-    elseif opcode == ${V.vm_opcodes}.BUILD_STRING then
+        ${V.vm_stack}[#${V.vm_stack} + 1] = operand
+
+    elseif opcode == OP_BUILD_STRING then
         local str = ""
         for i = 1, #${V.vm_stack} do
             str = str .. string.char(${V.vm_stack}[i])
         end
-        outputBuffer[1] = str
+        ${V.vm_output} = str
         ${V.vm_stack} = {}
-    elseif opcode == ${V.vm_opcodes}.EXECUTE then
-        local source = outputBuffer[1]
-        if not source then error("[Mawww] Nothing to execute") end
 
-        local load_ok, fn_or_err = pcall(${V.vm_loader}, source)
-        if not load_ok then
-            error("[Mawww] Decode failed: " .. tostring(fn_or_err))
+    elseif opcode == OP_EXECUTE then
+        local src = ${V.vm_output}
+        if not src or #src == 0 then
+            error("[Mawww] Nothing to execute")
         end
 
-        local fn = fn_or_err
-        -- Handle Delta's loadstring return
+        -- Handle Delta loadstring: (true, function) atau (false, error)
+        local load_ok, load_res = pcall(${V.loadstr}, src)
+        if not load_ok then
+            error("[Mawww] Decode failed: " .. tostring(load_res))
+        end
+
+        local fn = load_res
+        -- Jika load_res adalah boolean true (Delta), maka fungsi ada di arg kedua
+        -- Tapi pcall hanya mengembalikan satu nilai. Kita coba panggil langsung.
         if type(fn) == "boolean" then
-            -- loadstring returned (true, function)
-            -- Actually in Delta, it returns (function) or (nil, error)
-            -- We already have the function in fn_or_err if load_ok is true
-            -- But pcall returns (true, result)
-            -- So fn_or_err is the function
+            -- Delta: loadstring mengembalikan (true, function) di luar pcall
+            -- Karena kita pakai pcall, kita perlu memanggil ulang loadstring
+            local direct_ok, direct_fn = ${V.loadstr}(src)
+            if direct_ok and type(direct_fn) == "function" then
+                fn = direct_fn
+            elseif type(direct_ok) == "function" then
+                fn = direct_ok
+            else
+                error("[Mawww] loadstring returned " .. type(direct_ok))
+            end
         end
 
         if type(fn) ~= "function" then
@@ -296,10 +275,11 @@ while ${V.vm_pc} <= #decryptedBytecode do
         if not exec_ok then
             error("[Mawww] Execution failed: " .. tostring(exec_err))
         end
-    elseif opcode == ${V.vm_opcodes}.HALT then
+
+    elseif opcode == OP_HALT then
         break
+
     else
-        -- Unknown opcode, ignore or error
         error("[Mawww] Unknown VM opcode: " .. tostring(opcode))
     end
 end
@@ -385,5 +365,5 @@ app.get('*', (req, res) => {
 
 // ===== Listen =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v11.0 (VM & Encryption) running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v12.0 (Fixed VM) running on 0.0.0.0:${PORT}`);
 });
