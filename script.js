@@ -70,7 +70,6 @@ function uploadFile(ev) {
     reader.readAsText(file);
 }
 
-// wire buttons
 document.addEventListener('DOMContentLoaded', () => {
     $('obfBtn')?.addEventListener('click', obfuscate);
     $('copyBtn')?.addEventListener('click', copyOutput);
