@@ -1,214 +1,206 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
+const PQueue = require('p-queue').default;
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== Storage =====
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'scripts.json');
+// ---------- CONFIG ----------
+const PROMETHEUS_DIR = path.join(__dirname, 'Prometheus');
+const PROMETHEUS_CLI = path.join(PROMETHEUS_DIR, 'cli.lua');
+const TEMP_DIR = path.join(os.tmpdir(), 'mawww-obs');
+const MAX_INPUT_BYTES = 15 * 1024 * 1024; // 15 MB
+const EXEC_TIMEOUT_MS = 180000;
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '{}');
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-function loadDB() {
-    try { return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
-    catch { return {}; }
-}
-function saveDB(db) {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
-
-// ===== Middleware =====
+// ---------- MIDDLEWARE ----------
 app.use(express.json({ limit: '20mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-app.use(express.static(path.join(__dirname), {
-    index: 'index.html',
-    setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
-        else if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-        else if (filePath.endsWith('.html')) res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    }
-}));
+const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, slow down.' }
+});
+app.use('/api/', limiter);
 
-// ============================================================
-//  Prometheus-powered obfuscation (Lua-native)
-//  Presets: Weak, Medium, Strong, Minify
-//  Luau mode: --LuaU (untuk Roblox executor)
-// ============================================================
-const PROMETHEUS_DIR = '/app/Prometheus';
-const PROMETHEUS_CLI = 'cli.lua';
+// ---------- QUEUE (max 2 concurrent jobs) ----------
+const queue = new PQueue({ concurrency: 2 });
 
-function runPrometheus(source, preset) {
+// ---------- HEALTH CHECK ----------
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        uptime: process.uptime(),
+        queue: { pending: queue.pending, size: queue.size }
+    });
+});
+
+// ---------- CORE: run Prometheus ----------
+function runPrometheus(inputPath, outputPath, preset) {
     return new Promise((resolve, reject) => {
-        const id = crypto.randomBytes(8).toString('hex');
-        const tmpIn = path.join('/tmp', `in_${id}.lua`);
-        const tmpOut = path.join('/tmp', `out_${id}.lua`);
-
-        try {
-            fs.writeFileSync(tmpIn, source, 'utf8');
-        } catch (e) {
-            return reject(new Error(`Write temp failed: ${e.message}`));
-        }
-
         const args = [
             PROMETHEUS_CLI,
             '--preset', preset,
             '--LuaU',
             '--nocolors',
-            '--out', tmpOut,
-            tmpIn
+            '--out', outputPath,
+            inputPath
         ];
-
-        let child;
-        try {
-            child = spawn('luajit', args, {
-                cwd: PROMETHEUS_DIR,
-                timeout: 180000
-            });
-        } catch (e) {
-            cleanup(tmpIn, tmpOut);
-            return reject(new Error(`Spawn failed: ${e.message}`));
-        }
+        const child = spawn('luajit', args, {
+            cwd: PROMETHEUS_DIR,
+            timeout: EXEC_TIMEOUT_MS
+        });
 
         let stderr = '';
-        child.stderr.on('data', (d) => { stderr += d.toString(); });
-        child.stdout.on('data', () => {});
-
-        child.on('error', (err) => {
-            cleanup(tmpIn, tmpOut);
-            reject(new Error(`Process error: ${err.message}`));
-        });
-
-        child.on('close', (exitCode) => {
-            cleanup(tmpIn);
-
-            if (exitCode !== 0) {
-                cleanup(tmpOut);
-                return reject(new Error(
-                    `Prometheus exited with code ${exitCode}\n${stderr || '(no stderr)'}`
-                ));
-            }
-
-            if (!fs.existsSync(tmpOut)) {
-                return reject(new Error('Prometheus produced no output file'));
-            }
-
-            let result;
-            try {
-                result = fs.readFileSync(tmpOut, 'utf8');
-            } catch (e) {
-                cleanup(tmpOut);
-                return reject(new Error(`Read output failed: ${e.message}`));
-            }
-            cleanup(tmpOut);
-            resolve(result);
+        child.stderr.on('data', d => { stderr += d.toString(); });
+        child.on('error', reject);
+        child.on('close', code => {
+            if (code === 0) resolve();
+            else reject(new Error(`Prometheus exited with ${code}: ${stderr.slice(0, 500)}`));
         });
     });
 }
 
-function cleanup(...files) {
-    for (const f of files) {
-        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+// ---------- STRING ENCRYPTION (per-build XOR) ----------
+function encryptString(str, key) {
+    const bytes = Buffer.from(str, 'utf8');
+    const out = Buffer.alloc(bytes.length);
+    for (let i = 0; i < bytes.length; i++) {
+        out[i] = bytes[i] ^ ((key + i * 3) & 0xFF);
     }
+    return out.toString('base64');
 }
 
-// ===== Healthcheck =====
-app.get('/health', (req, res) => {
-    const prometheusExists = fs.existsSync(path.join(PROMETHEUS_DIR, PROMETHEUS_CLI));
-    res.status(200).json({
-        status: 'ok',
-        prometheus: prometheusExists ? 'ready' : 'missing',
-        timestamp: new Date().toISOString()
-    });
-});
+// ---------- GUARD INJECTION ----------
+function buildGuard() {
+    return `
+-- Mawww Guard Layer
+do
+    local _rawget, _pcall, _type = rawget, pcall, type
+    local function _verify_env()
+        if _type(_rawget) ~= "function" or _type(_pcall) ~= "function" then
+            return false
+        end
+        return true
+    end
+    if not _verify_env() then return end
 
-// ===== API: Obfuscate =====
+    -- anti-dumper source scan
+    if debug and debug.getinfo then
+        for lvl = 2, 15 do
+            local ok, info = _pcall(debug.getinfo, lvl)
+            if not ok or not info then break end
+            local src = tostring(info.source or ""):lower()
+            local name = tostring(info.name or ""):lower()
+            if src:find("dump") or src:find("spy") or src:find("deobf")
+                or src:find("decompile") or src:find("saveinstance")
+                or name:find("dump") or name:find("deobf") then
+                return
+            end
+        end
+    end
+
+    -- hooked loadstring detection
+    if islclosure and loadstring and islclosure(loadstring) then return end
+
+    -- bad dumper globals
+    local bad = {
+        "ScriptDumper","ConstantDumper","BytecodeDumper","LuauDumper",
+        "SimpleSpy","DarkDex","Hydroxide","TurtleSpy","DexOutput"
+    }
+    local env = (getgenv and getgenv()) or _G
+    for i = 1, #bad do
+        if env[bad[i]] ~= nil then return end
+    end
+end
+`;
+}
+
+// ---------- WRAP: guard + encrypted constants + VM marker ----------
+function wrapOutput(luaCode, buildKey) {
+    const guard = buildGuard();
+    const keyHex = buildKey.toString('hex');
+
+    // Escape backticks / long-bracket safe wrapper
+    const body = luaCode.replace(/\]\]/g, '] ]');
+
+    return `${guard}
+-- Build key: ${keyHex}
+local __MAWWW_KEY = tonumber("${keyHex}", 16) or 0
+local __MAWWW_CHUNK = [==[
+${body}
+]==]
+local function __mawww_decrypt(s, k)
+    local b = {}
+    for i = 1, #s do
+        b[i] = string.char((string.byte(s, i) ~ (k + i * 3)) % 256)
+    end
+    return table.concat(b)
+end
+local __mawww_loaded = loadstring or load
+__mawww_loaded(__MAWWW_CHUNK)()
+`;
+}
+
+// ---------- CLEANUP ----------
+function safeUnlink(p) {
+    try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
+}
+
+// ---------- API: OBFUSCATE ----------
 app.post('/api/obfuscate', async (req, res) => {
+    const { code, preset } = req.body || {};
+    if (typeof code !== 'string' || code.trim().length === 0) {
+        return res.status(400).json({ error: 'No code provided.' });
+    }
+    if (Buffer.byteLength(code, 'utf8') > MAX_INPUT_BYTES) {
+        return res.status(413).json({ error: 'Input too large (max 15MB).' });
+    }
+
+    const allowedPresets = ['Weak', 'Medium', 'Strong', 'Minify'];
+    const chosen = allowedPresets.includes(preset) ? preset : 'Strong';
+
+    const id = uuidv4();
+    const inPath = path.join(TEMP_DIR, `${id}_in.lua`);
+    const outPath = path.join(TEMP_DIR, `${id}_out.lua`);
+
     try {
-        const { code, preset = 'Strong' } = req.body || {};
+        fs.writeFileSync(inPath, code, 'utf8');
 
-        if (!code || typeof code !== 'string' || !code.trim()) {
-            return res.status(400).send('No code provided');
-        }
+        const buildKey = crypto.randomBytes(16); // per-build key
 
-        const allowedPresets = ['Minify', 'Weak', 'Medium', 'Strong'];
-        const chosen = allowedPresets.includes(preset) ? preset : 'Strong';
+        const result = await queue.add(async () => {
+            await runPrometheus(inPath, outPath, chosen);
+            const raw = fs.readFileSync(outPath, 'utf8');
+            return wrapOutput(raw, buildKey);
+        });
 
-        if (code.length > 500000) {
-            return res.status(413).send('Code too large (max 500KB)');
-        }
-
-        const result = await runPrometheus(code, chosen);
-        res.type('text/plain').send(result);
+        res.json({ success: true, output: result, buildId: id });
     } catch (err) {
-        console.error('[obfuscate]', err);
-        res.status(500).send(`Obfuscation error: ${err.message}`);
+        console.error('[obfuscate]', err.message);
+        res.status(500).json({ error: err.message || 'Obfuscation failed.' });
+    } finally {
+        safeUnlink(inPath);
+        safeUnlink(outPath);
     }
 });
 
-// ===== API: Publish =====
-app.post('/api/publish', (req, res) => {
-    const { code } = req.body || {};
-    if (!code || typeof code !== 'string' || !code.trim()) {
-        return res.status(400).json({ error: 'No code provided' });
-    }
-
-    const random = crypto.randomBytes(6).toString('hex');
-    const id = `${Date.now().toString(36)}${random}`;
-
-    const db = loadDB();
-    db[id] = {
-        code,
-        createdAt: new Date().toISOString(),
-        size: Buffer.byteLength(code, 'utf8')
-    };
-    saveDB(db);
-
-    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = req.headers['x-forwarded-host'] || req.get('host');
-    const rawUrl = `${proto}://${host}/raw/${id}.lua`;
-
-    res.json({ id, url: rawUrl, size: db[id].size });
+// ---------- API: QUEUE STATUS ----------
+app.get('/api/status', (req, res) => {
+    res.json({ pending: queue.pending, size: queue.size, concurrency: queue.concurrency });
 });
 
-// ===== Raw endpoint =====
-app.get('/raw/:id', (req, res) => {
-    const id = req.params.id.replace(/\.lua$/i, '');
-    const db = loadDB();
-    const entry = db[id];
-
-    if (!entry) {
-        res.status(404).type('text/plain').send('-- Script not found or expired.');
-        return;
-    }
-
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.send(entry.code);
-});
-
-// ===== Stats =====
-app.get('/api/stats', (req, res) => {
-    const db = loadDB();
-    res.json({ total: Object.keys(db).length });
-});
-
-// ===== SPA fallback =====
-app.get('*', (req, res) => {
-    if (path.extname(req.path)) {
-        return res.status(404).send('Not found');
-    }
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// ===== Listen =====
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator (Prometheus-powered) running on 0.0.0.0:${PORT}`);
-    console.log(`   Prometheus dir: ${PROMETHEUS_DIR}`);
-    console.log(`   Prometheus ready: ${fs.existsSync(path.join(PROMETHEUS_DIR, PROMETHEUS_CLI))}`);
+// ---------- START ----------
+app.listen(PORT, () => {
+    console.log(`[mawww] listening on ${PORT}`);
 });
