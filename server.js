@@ -34,14 +34,7 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // ============================================================
-//  ULTRA OBFUSCATOR v9.0 — Simple but Deadly
-//  - 4-layer XOR encryption
-//  - Chunk splitting
-//  - Decoy arrays & dead code
-//  - Only uses: string.char, string.gmatch, table.concat,
-//    tonumber, type, pcall, loadstring/load, math.floor
-//  - NO table.insert, NO ipairs, NO closures in pcall
-//  - 100% Delta/Synapse/Krnl/Fluxus/Solara/Xeno compatible
+//  ULTRA OBFUSCATOR v9.1 — Delta-Safe (Fixed loadstring)
 // ============================================================
 
 function utf8Encode(str) {
@@ -81,20 +74,17 @@ function obfuscate(source) {
 
     const nm = makeNameGenerator();
 
-    // Random variable names — generate MANY for decoys too
     const V = {};
     const baseNames = [
         'loader','xor','bitLib','rawChunks','rawStr','byteArr','idx','numStr',
         'outBuf','src','fn','v','x','y','r','p','xb','yb','i','pos',
-        'key0','key1','key2','key3'
+        'key0','key1','key2','key3','pcall_result','load_result'
     ];
     baseNames.forEach(k => V[k] = nm());
 
-    // 15 decoy variable names
     const D = [];
     for (let i = 0; i < 15; i++) D.push(nm());
 
-    // ─── Generate 4 random XOR keys (64 bytes each) ───
     const K = [];
     for (let k = 0; k < 4; k++) {
         const key = [];
@@ -102,7 +92,6 @@ function obfuscate(source) {
         K.push(key);
     }
 
-    // ─── Encrypt: 4-layer XOR ───
     const enc = bytes.map((b, i) => {
         let v = b;
         v ^= K[0][i % 64];
@@ -112,7 +101,6 @@ function obfuscate(source) {
         return v & 0xFF;
     });
 
-    // ─── Split into chunks ───
     const numStr = enc.join(',');
     const chunks = [];
     for (let i = 0; i < numStr.length; i += 500) {
@@ -125,7 +113,6 @@ function obfuscate(source) {
     const k2Lua = K[2].join(',');
     const k3Lua = K[3].join(',');
 
-    // ─── Generate decoy arrays (fake data) ───
     const decoyArrays = [];
     for (let d = 0; d < 5; d++) {
         const size = 30 + Math.floor(Math.random() * 40);
@@ -137,10 +124,9 @@ function obfuscate(source) {
         `local ${D[i]} = {${arr}}\nlocal ${D[i + 5]} = #${D[i]} + 1`
     ).join('\n');
 
-    // ─── Build Lua output ───
-    const lua = `-- Mawww Obfuscator v9.0 | Multi-Layer Protection
+    // ─── PERBAIKAN UTAMA: handling loadstring ───
+    const lua = `-- Mawww Obfuscator v9.1 | Fixed loadstring handling
 -- Generated: ${new Date().toISOString()}
--- Output: 4-layer XOR + chunked payload + decoy arrays
 -- DO NOT EDIT
 
 ${decoyCode}
@@ -212,14 +198,24 @@ for ${V.i} = 1, #${V.byteArr} do
 end
 
 local ${V.src} = table.concat(${V.outBuf})
-local ${V.fn}, ${D[12]} = pcall(${V.loader}, ${V.src})
-if not ${V.fn} then
-    error("[Mawww] Decode failed: " .. tostring(${D[12]}))
+
+-- ============================================================
+--  PERBAIKAN: tangkap KEDUA nilai dari loadstring
+-- ============================================================
+local ${V.load_result}, ${V.fn} = ${V.loader}(${V.src})
+if not ${V.load_result} then
+    error("[Mawww] Decode failed: " .. tostring(${V.fn}))
 end
+
 if type(${V.fn}) ~= "function" then
     error("[Mawww] Expected function, got " .. type(${V.fn}))
 end
-${V.fn}()
+
+-- pcall untuk eksekusi
+local ${V.pcall_result}, ${D[12]} = pcall(${V.fn})
+if not ${V.pcall_result} then
+    error("[Mawww] Execution failed: " .. tostring(${D[12]}))
+end
 `;
 
     return lua;
@@ -302,5 +298,5 @@ app.get('*', (req, res) => {
 
 // ===== Listen =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v9.0 running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v9.1 running on 0.0.0.0:${PORT}`);
 });
