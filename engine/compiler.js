@@ -20,7 +20,7 @@ class Compiler {
     const luaIdx = slot + 1;
 
     const K = [];
-    const upvals = []; // [{ parentReg }]
+    const upvals = [];
     const insts = [];
     const locals = {};
     let regTop = 0;
@@ -46,9 +46,8 @@ class Compiler {
       return r;
     };
 
-    const freeReg = (r) => {
-      if (r + 1 === regTop) regTop--;
-    };
+    // DISABLED: register reuse caused bugs when locals still referenced
+    const freeReg = (r) => { /* no-op */ };
 
     const emit = (...ins) => {
       insts.push(ins);
@@ -121,7 +120,6 @@ class Compiler {
           } else {
             emit(ops[e.op] || 3, d, l, r);
           }
-          freeReg(r); freeReg(l);
           return d;
         }
         case 'UnOp': {
@@ -130,7 +128,6 @@ class Compiler {
           if (e.op === 'not') emit(16, d, r, 0);
           else if (e.op === '-') emit(18, d, r, 0);
           else if (e.op === '#') emit(17, d, r, 0);
-          freeReg(r);
           return d;
         }
         case 'Function': {
@@ -148,13 +145,11 @@ class Compiler {
               const k = cExpr(f.key);
               const v = cExpr(f.value);
               emit(20, r, k, v);
-              freeReg(v); freeReg(k);
             } else {
               const v = cExpr(f.value);
               const ki = newReg();
               emit(1, ki, KINT(arrayIdx), 0);
               emit(20, r, ki, v);
-              freeReg(ki); freeReg(v);
               arrayIdx++;
             }
           }
@@ -165,7 +160,6 @@ class Compiler {
           const k = cExpr(e.key);
           const d = newReg();
           emit(21, d, o, k);
-          freeReg(k); freeReg(o);
           return d;
         }
         case 'Call': {
@@ -176,12 +170,10 @@ class Compiler {
           for (let i = 0; i < n; i++) {
             const ar = cExpr(e.args[i]);
             emit(2, argSlots[i], ar, 0);
-            freeReg(ar);
           }
           const d = newReg();
           emit(24, f, n, 1);
           emit(2, d, f, 0);
-          argSlots.forEach(freeReg);
           return d;
         }
         case 'MethodCall': {
@@ -189,21 +181,19 @@ class Compiler {
           const mIdx = KINT(e.method);
           const mFn = newReg();
           emit(36, mFn, o, mIdx);
-          // Reserve self slot (written by VM at runtime as Reg[mFn+1])
-          if (regTop < mFn + 2) regTop = mFn + 2;
-          if (regTop > regMax) regMax = regTop;
+          // Reserve self slot at mFn+1
+          const selfSlot = newReg();
+          while (selfSlot < mFn + 1) { newReg(); }
           const n = e.args.length;
           const argSlots = [];
           for (let i = 0; i < n; i++) argSlots.push(newReg());
           for (let i = 0; i < n; i++) {
             const ar = cExpr(e.args[i]);
             emit(2, argSlots[i], ar, 0);
-            freeReg(ar);
           }
           const d = newReg();
           emit(24, mFn, n + 1, 1);
           emit(2, d, mFn, 0);
-          argSlots.forEach(freeReg);
           return d;
         }
       }
@@ -217,7 +207,6 @@ class Compiler {
           s.exprs.forEach((e, i) => {
             const r = cExpr(e);
             if (i < regs.length) emit(2, regs[i], r, 0);
-            freeReg(r);
           });
           s.names.forEach((n, i) => { locals[n] = regs[i]; });
           break;
@@ -238,10 +227,8 @@ class Compiler {
               const o = cExpr(t.obj);
               const k = cExpr(t.key);
               emit(20, o, k, r);
-              freeReg(k); freeReg(o);
             }
           });
-          regs.forEach(freeReg);
           break;
         }
         case 'ExprStatement': cExpr(s.expr); break;
@@ -253,7 +240,6 @@ class Compiler {
             for (let i = 1; i < rs.length; i++) emit(2, base + i, rs[i], 0);
             emit(25, base, rs.length, 0);
           }
-          rs.forEach(freeReg);
           break;
         }
         case 'If': {
@@ -323,8 +309,10 @@ class Compiler {
           const nextR = newReg();
           emit(22, nextR, KINT('next'), 0);
           const base = nextR;
-          emit(2, base + 1, iterExpr, 0);
-          emit(2, base + 2, stateR, 0);
+          const base1 = newReg();
+          const base2 = newReg();
+          emit(2, base1, iterExpr, 0);
+          emit(2, base2, stateR, 0);
           emit(24, base, 2, vars.length);
           for (let i = 0; i < vars.length; i++) {
             emit(2, vars[i], base + i, 0);
