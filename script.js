@@ -20,34 +20,8 @@ const copyLoadstringBtn = document.getElementById('copyLoadstringBtn');
 const openRawBtn = document.getElementById('openRawBtn');
 
 // ============================================================
-//  Server-side obfuscation via Prometheus
+//  UI Helpers
 // ============================================================
-async function obfuscateLua(source) {
-    if (!source || !source.trim()) {
-        throw new Error('Please provide Lua source code to obfuscate.');
-    }
-
-    const preset = presetSelect ? presetSelect.value : 'Strong';
-
-    const response = await fetch('/api/obfuscate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            code: source,
-            preset: preset,
-            luaVersion: 'LuaU'
-        })
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Server error ${response.status}`);
-    }
-
-    return await response.text();
-}
-
-// ===== UI Helpers =====
 function updateCounts() {
     inputCount.textContent = `${luaInput.value.length} characters`;
     outputCount.textContent = `${luaOutput.value.length} characters`;
@@ -81,7 +55,26 @@ async function copyToClipboard(text) {
     }
 }
 
-// ===== Obfuscate =====
+// ============================================================
+//  Obfuscate (kirim ke server)
+// ============================================================
+async function obfuscateLua(source) {
+    if (!source || !source.trim()) {
+        throw new Error('Please provide Lua source code to obfuscate.');
+    }
+    const preset = presetSelect ? presetSelect.value : 'Strong';
+    const response = await fetch('/api/obfuscate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: source, preset })
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Server error ${response.status}`);
+    }
+    return await response.text();
+}
+
 obfuscateBtn.addEventListener('click', async () => {
     if (!luaInput.value.trim()) {
         showStatus('❌ Please provide Lua source code.', 'error');
@@ -96,7 +89,7 @@ obfuscateBtn.addEventListener('click', async () => {
         </svg>
         Obfuscating...
     `;
-    showStatus('⏳ Memproses obfuscation di server (Prometheus Strong)...', 'info');
+    showStatus('⏳ Memproses obfuscation...', 'info');
 
     try {
         const result = await obfuscateLua(luaInput.value);
@@ -137,15 +130,12 @@ fileInput.addEventListener('change', (e) => {
 
 // ===== Download Output =====
 downloadBtn.addEventListener('click', () => {
-    if (!luaOutput.value) {
-        showStatus('❌ Nothing to download.', 'error');
-        return;
-    }
+    if (!luaOutput.value) { showStatus('❌ Nothing to download.', 'error'); return; }
     const blob = new Blob([luaOutput.value], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `mawww-prometheus-${Date.now()}.lua`;
+    a.download = `mawww-vm-${Date.now()}.lua`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -210,7 +200,7 @@ copyLoadstringBtn.addEventListener('click', async () => {
     const text = loadstringOutput.value;
     if (!text) return;
     const ok = await copyToClipboard(text);
-    showStatus(ok ? '📋 Loadstring copied! Paste into executor.' : '❌ Copy failed.', ok ? 'success' : 'error');
+    showStatus(ok ? '📋 Loadstring copied!' : '❌ Copy failed.', ok ? 'success' : 'error');
 });
 
 // ===== Open Raw URL =====
