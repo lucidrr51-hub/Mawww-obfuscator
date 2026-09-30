@@ -18,26 +18,30 @@ class Compiler {
         this.regTop = 0;
         this.locals = {};
         this.upvals = [];
-        this.labels = [];
         this.patches = [];
+        this.scopeStack = [];
     }
 
-    // Alokasi register baru
     newReg() {
         const r = this.regTop;
         this.regTop++;
         return r;
     }
 
-    // Mendapatkan register untuk variabel lokal
     getLocal(name) {
-        if (this.locals[name] !== undefined) {
-            return this.locals[name];
+        // Cari dari scope terdalam ke terluar
+        for (let i = this.scopeStack.length - 1; i >= 0; i--) {
+            if (this.scopeStack[i][name] !== undefined) {
+                return this.scopeStack[i][name];
+            }
         }
         return null;
     }
 
-    // Menambahkan konstanta ke K array
+    setLocal(name, reg) {
+        this.scopeStack[this.scopeStack.length - 1][name] = reg;
+    }
+
     addConstant(value) {
         for (let i = 0; i < this.currentProto.K.length; i++) {
             if (this.currentProto.K[i] === value) return i;
@@ -46,14 +50,31 @@ class Compiler {
         return this.currentProto.K.length - 1;
     }
 
-    // Emit instruksi
     emit(op, a, b, c) {
         this.currentProto.insts.push([op, a || 0, b || 0, c || 0]);
+        return this.currentProto.insts.length - 1;
     }
 
-    // Compile node AST
-    compileNode(node) {
-        if (!node) return;
+    emitJmp(op, a) {
+        const idx = this.emit(op, a || 0, 0, 0);
+        this.patches.push(idx);
+        return idx;
+    }
+
+    patchJmp(idx) {
+        const target = this.currentProto.insts.length;
+        const pc = idx + 1; // PC setelah instruksi ini
+        const offset = target - pc;
+        this.currentProto.insts[idx][2] = offset;
+    }
+
+    patchAll() {
+        this.patches.forEach(idx => this.patchJmp(idx));
+        this.patches = [];
+    }
+
+    compileNode(node, nret = 1) {
+        if (!node) return null;
 
         switch (node.type) {
             case 'Chunk':
@@ -65,51 +86,57 @@ class Compiler {
                     upvals: []
                 };
                 this.protos.push(this.currentProto);
+                this.scopeStack.push({});
                 
                 node.body.forEach(stmt => this.compileNode(stmt));
                 this.emit(Op.RETURN, 0, 0, 0);
+                this.patchAll();
+                this.scopeStack.pop();
                 break;
 
             case 'LocalStatement':
+                this.scopeStack.push({});
                 node.variables.forEach((v, i) => {
+                    const reg = this.newReg();
+                    this.setLocal(v.name, reg);
                     if (node.init[i]) {
-                        const reg = this.compileNode(node.init[i]);
-                        this.locals[v.name] = reg;
-                    } else {
-                        this.locals[v.name] = this.newReg();
+                        const srcReg = this.compileNode(node.init[i]);
+                        if (srcReg !== reg) {
+                            this.emit(Op.MOVE, reg, srcReg, 0);
+                        }
                     }
                 });
                 break;
 
             case 'AssignmentStatement':
                 node.variables.forEach((v, i) => {
-                    const reg = this.compileNode(node.init[i]);
+                    const srcReg = this.compileNode(node.init[i]);
                     if (v.type === 'Identifier') {
-                        const target = this.locals[v.name];
-                        if (target !== undefined) {
-                            this.emit(Op.MOVE, target, reg, 0);
+                        const target = this.getLocal(v.name);
+                        if (target !== null) {
+                            this.emit(Op.MOVE, target, srcReg, 0);
                         } else {
                             const k = this.addConstant(v.name);
-                            this.emit(Op.SETGLOBAL, reg, k, 0);
+                            this.emit(Op.SETGLOBAL, srcReg, k, 0);
                         }
                     } else if (v.type === 'MemberExpression') {
                         const objReg = this.compileNode(v.base);
                         const keyReg = this.compileNode(v.index);
-                        this.emit(Op.SETTABLE, objReg, keyReg, reg);
+                        this.emit(Op.SETTABLE, objReg, keyReg, srcReg);
                     }
                 });
                 break;
 
             case 'CallStatement':
-                this.compileNode(node.expression);
+                this.compileNode(node.expression, 0);
                 break;
 
             case 'ReturnStatement':
                 if (node.arguments.length > 0) {
-                    const startReg = this.regTop;
-                    node.arguments.forEach(arg => {
+                    const startReg = this.newReg();
+                    node.arguments.forEach((arg, i) => {
                         const r = this.compileNode(arg);
-                        this.emit(Op.MOVE, startReg + (this.regTop - startReg), r, 0);
+                        this.emit(Op.MOVE, startReg + i, r, 0);
                     });
                     this.emit(Op.RETURN, startReg, node.arguments.length, 0);
                 } else {
@@ -118,24 +145,87 @@ class Compiler {
                 break;
 
             case 'IfStatement':
-                // Implementasi if sederhana (bisa dikembangkan untuk else/elseif)
                 const condReg = this.compileNode(node.clauses[0].condition);
-                const jmpIdx = this.currentProto.insts.length;
-                this.emit(Op.TEST, condReg, 0, 0); 
-                // ... Logika jump (perlu implementasi lebih lanjut untuk production)
+                const elseJmp = this.emitJmp(Op.TESTSET, condReg);
+                
+                this.scopeStack.push({});
+                node.clauses[0].body.forEach(stmt => this.compileNode(stmt));
+                this.scopeStack.pop();
+                
+                const endJmp = this.emitJmp(Op.JMP);
+                this.patchJmp(elseJmp);
+                
+                if (node.clauses.length > 1 && node.clauses[1].type === 'ElseClause') {
+                    this.scopeStack.push({});
+                    node.clauses[1].body.forEach(stmt => this.compileNode(stmt));
+                    this.scopeStack.pop();
+                }
+                this.patchJmp(endJmp);
                 break;
 
             case 'WhileStatement':
-                // Implementasi while loop
+                const loopStart = this.currentProto.insts.length;
+                const wCondReg = this.compileNode(node.condition);
+                const wExitJmp = this.emitJmp(Op.TESTSET, wCondReg);
+                
+                this.scopeStack.push({});
+                node.body.forEach(stmt => this.compileNode(stmt));
+                this.scopeStack.pop();
+                
+                this.emit(Op.JMP, 0, loopStart - (this.currentProto.insts.length + 1), 0);
+                this.patchJmp(wExitJmp);
                 break;
 
             case 'ForNumericStatement':
-                // Implementasi for loop
+                // Implementasi sederhana untuk numeric for
+                const startReg = this.compileNode(node.start);
+                const endReg = this.compileNode(node.end);
+                if (node.step) this.compileNode(node.step);
+                
+                const loopVarReg = this.newReg();
+                this.scopeStack.push({});
+                this.setLocal(node.variable.name, loopVarReg);
+                this.emit(Op.MOVE, loopVarReg, startReg, 0);
+                
+                const forStart = this.currentProto.insts.length;
+                const cond = this.newReg();
+                this.emit(Op.LE, cond, loopVarReg, endReg);
+                const forExitJmp = this.emitJmp(Op.TESTSET, cond);
+                
+                node.body.forEach(stmt => this.compileNode(stmt));
+                
+                this.emit(Op.ADD, loopVarReg, loopVarReg, 1); // step default 1
+                this.emit(Op.JMP, 0, forStart - (this.currentProto.insts.length + 1), 0);
+                this.patchJmp(forExitJmp);
+                this.scopeStack.pop();
                 break;
 
             case 'FunctionDeclaration':
-                // Implementasi deklarasi fungsi
-                break;
+                const newProto = {
+                    K: [],
+                    insts: [],
+                    numParams: node.parameters.length,
+                    isVararg: node.isVararg,
+                    upvals: []
+                };
+                const oldProto = this.currentProto;
+                this.currentProto = newProto;
+                this.protos.push(newProto);
+                this.scopeStack.push({});
+                
+                node.parameters.forEach((p, i) => {
+                    this.setLocal(p.name, i);
+                });
+                
+                node.body.forEach(stmt => this.compileNode(stmt));
+                this.emit(Op.RETURN, 0, 0, 0);
+                this.patchAll();
+                this.scopeStack.pop();
+                
+                this.currentProto = oldProto;
+                const closureReg = this.newReg();
+                this.emit(Op.CLOSURE, closureReg, this.protos.length - 1, 0);
+                return closureReg;
 
             case 'Identifier':
                 const localReg = this.getLocal(node.name);
@@ -150,11 +240,15 @@ class Compiler {
             case 'StringLiteral':
             case 'NumericLiteral':
             case 'BooleanLiteral':
-            case 'NilLiteral':
                 const constIndex = this.addConstant(node.value);
                 const reg = this.newReg();
                 this.emit(Op.LOADK, reg, constIndex, 0);
                 return reg;
+
+            case 'NilLiteral':
+                const nilReg = this.newReg();
+                this.emit(Op.LOADK, nilReg, this.addConstant(null), 0);
+                return nilReg;
 
             case 'BinaryExpression':
                 const leftReg = this.compileNode(node.left);
@@ -187,67 +281,66 @@ class Compiler {
                 return resReg;
 
             case 'CallExpression':
-                return this.compileCallExpression(node);
+                return this.compileCallExpression(node, nret);
 
             case 'MethodCall':
-                return this.compileMethodCall(node);
+                return this.compileMethodCall(node, nret);
 
             default:
                 throw new Error(`Unhandled node type: ${node.type}`);
         }
+        return null;
     }
 
-    // Compile pemanggilan fungsi biasa: func(arg1, arg2)
-    compileCallExpression(node) {
+    compileCallExpression(node, nret) {
         const funcReg = this.compileNode(node.base);
-        const argStart = this.regTop;
+        const argStart = funcReg + 1;
+        if (this.regTop < argStart) this.regTop = argStart;
         
-        node.arguments.forEach(arg => {
+        node.arguments.forEach((arg, i) => {
             const r = this.compileNode(arg);
-            this.emit(Op.MOVE, this.regTop, r, 0);
-            this.newReg();
+            if (r !== argStart + i) {
+                this.emit(Op.MOVE, argStart + i, r, 0);
+            }
         });
-
-        const nret = 1; // Asumsi default 1 return value
-        this.emit(Op.CALL, funcReg, node.arguments.length, nret);
         
-        return funcReg; // Hasil return ada di funcReg
+        if (this.regTop < argStart + node.arguments.length) {
+            this.regTop = argStart + node.arguments.length;
+        }
+
+        this.emit(Op.CALL, funcReg, node.arguments.length, nret);
+        return funcReg;
     }
 
-    // PERBAIKAN UTAMA: Compile method call: obj:method(arg1, arg2)
-    // Error 'boolean was passed' sebelumnya terjadi karena register untuk 'self' dan argumen bertabrakan.
-    compileMethodCall(node) {
-        // 1. Compile objek (base)
+    compileMethodCall(node, nret) {
         const objReg = this.compileNode(node.base);
-        
-        // 2. Load method name sebagai konstanta
         const methodName = node.identifier.name;
         const kIdx = this.addConstant(methodName);
         
-        // 3. Alokasikan register untuk method function dan self
-        const mFn = this.newReg(); // Method function
-        const self = this.newReg(); // Self (objek itu sendiri)
+        const mFn = this.newReg(); // Reg[A] = function
         
-        // Emit GETMETHOD (Opcode 36) yang akan mengisi mFn dan self
+        // Emit GETMETHOD. VM akan mengisi mFn dan mFn+1 (self)
         this.emit(Op.GETMETHOD, mFn, objReg, kIdx);
         
-        // 4. Alokasikan register untuk argumen, mulai setelah 'self'
-        // Pastikan register untuk argumen tidak menimpa 'self' atau 'mFn'
-        const argStart = this.regTop;
-        node.arguments.forEach(arg => {
-            const r = this.compileNode(arg);
-            // Pindahkan hasil argumen ke register argumen yang benar
-            this.emit(Op.MOVE, this.regTop, r, 0);
-            this.newReg();
-        });
-
-        // 5. Emit CALL. Argumen dimulai dari mFn + 2 (karena mFn dan self menempati mFn dan mFn+1)
-        // Tapi di VM kita, CALL mengambil argumen dari Reg[base + 1] hingga Reg[base + nargs].
-        // Karena self ada di Reg[mFn + 1], maka kita panggil dengan base = mFn.
-        const nargs = node.arguments.length + 1; // +1 untuk self
-        this.emit(Op.CALL, mFn, nargs, 1);
+        // Argumen harus dimulai dari mFn + 2 (setelah self)
+        const argStart = mFn + 2;
+        if (this.regTop < argStart) {
+            this.regTop = argStart;
+        }
         
-        // Hasil return ada di mFn (base + 0)
+        node.arguments.forEach((arg, i) => {
+            const r = this.compileNode(arg);
+            if (r !== argStart + i) {
+                this.emit(Op.MOVE, argStart + i, r, 0);
+            }
+        });
+        
+        if (this.regTop < argStart + node.arguments.length) {
+            this.regTop = argStart + node.arguments.length;
+        }
+
+        const nargs = node.arguments.length + 1; // +1 untuk self
+        this.emit(Op.CALL, mFn, nargs, nret);
         return mFn;
     }
 }
