@@ -11,7 +11,7 @@
         <header class="header">
             <div class="header-inner">
                 <div class="header-left">
-                    <div class="logo-icon glow-green">
+                    <div class="logo-icon">
                         <svg class="shield-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                         </svg>
@@ -22,6 +22,15 @@
         </header>
 
         <main class="main-content">
+
+            <!-- Fetch dari Raw URL -->
+            <div class="url-row">
+                <input type="url" id="rawUrl" class="url-input"
+                       placeholder="Paste raw URL (contoh: https://raw.githubusercontent.com/user/repo/main/script.lua)">
+                <button id="fetchBtn" class="btn">Load URL</button>
+            </div>
+
+            <!-- Toolbar -->
             <div class="toolbar">
                 <select id="preset" class="preset-select">
                     <option value="Weak">Weak</option>
@@ -30,26 +39,42 @@
                     <option value="Minify">Minify</option>
                 </select>
                 <button id="obfBtn" class="btn btn-primary">Obfuscate</button>
-                <button id="copyBtn" class="btn">Copy</button>
+                <button id="copyBtn" class="btn">Copy Output</button>
                 <button id="dlBtn" class="btn">Download</button>
                 <label class="btn file-label">
-                    Upload
+                    Upload File
                     <input type="file" id="fileInput" accept=".lua,.txt" hidden>
                 </label>
             </div>
 
+            <!-- Editor -->
             <div class="editor-grid">
                 <div class="editor-panel">
-                    <label class="panel-label">Input</label>
+                    <label class="panel-label">Input (Lua)</label>
                     <textarea id="input" class="code-area" placeholder="Paste Lua code here..."></textarea>
                 </div>
                 <div class="editor-panel">
-                    <label class="panel-label">Output</label>
-                    <textarea id="output" class="code-area" readonly placeholder="Obfuscated code will appear here..."></textarea>
+                    <label class="panel-label">Output (Obfuscated)</label>
+                    <textarea id="output" class="code-area" readonly placeholder="Hasil obfuscate akan muncul di sini..."></textarea>
                 </div>
             </div>
 
-            <div id="status" class="status-bar"></div>
+            <!-- Loadstring Generator -->
+            <div id="lsBox" class="loadstring-box">
+                <h3>🔗 Loadstring One-Liner</h3>
+                <textarea id="lsOutput" class="loadstring-code" readonly></textarea>
+                <p class="loadstring-hint">
+                    Upload dulu hasil obfuscate ke <b>GitHub Raw</b> / <b>Pastebin Raw</b> / <b>GitHub Gist</b>,
+                    lalu ganti <code>YOUR_RAW_URL_HERE</code> dengan link raw kamu. Jalankan di executor:
+                    <br>— atau tekan <b>Copy Loadstring</b> untuk menyalin.
+                </p>
+                <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+                    <button id="copyLsBtn" class="btn btn-primary">Copy Loadstring</button>
+                </div>
+            </div>
+
+            <!-- Status -->
+            <div id="status" class="status-bar" style="margin-top:14px;"></div>
         </main>
     </div>
 
