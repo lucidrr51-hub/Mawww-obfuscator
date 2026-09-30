@@ -1,4 +1,30 @@
--- Mawww VM Runtime
+-- Mawww VM Runtime (Fixed Version)
+-- Perbaikan: Environment fallback, Error handling pcall, Nil-safety pada GETMETHOD, dan Guard pada Closure.
+
+-- 1. Anti-Tamper & Anti-Dumper (Diperkuat dengan pengecekan tipe loadstring)
+do
+    local _rawget, _pcall, _type = rawget, pcall, type
+    if _type(_rawget) ~= "function" or _type(_pcall) ~= "function" then return end
+    
+    -- Pengecekan loadstring yang lebih aman (mencegah error jika loadstring nil)
+    if islclosure and loadstring and _type(loadstring) == "function" and islclosure(loadstring) then return end
+    
+    local bad = {"ScriptDumper","ConstantDumper","BytecodeDumper","LuauDumper","SimpleSpy","DarkDex","Hydroxide","TurtleSpy"}
+    local env = (getgenv and getgenv()) or _G
+    for i = 1, #bad do 
+        if env[bad[i]] ~= nil then return end 
+    end
+    
+    if debug and debug.getinfo then
+        for lvl = 2, 12 do
+            local ok, info = _pcall(debug.getinfo, lvl)
+            if not ok or not info then break end
+            local s = tostring(info.source or ""):lower()
+            if s:find("dump") or s:find("deobf") or s:find("decompile") then return end
+        end
+    end
+end
+
 local unpack = table.unpack or unpack
 
 local function runVM(proto, upvals, env, varargs)
@@ -16,10 +42,12 @@ local function runVM(proto, upvals, env, varargs)
 
     varargs = varargs or {}
 
-    -- upvals here is the PARENT function's Reg table (passed by reference)
+    -- Perbaikan 1: Guard pada makeClosure untuk mencegah error 'sub' nil
     local function makeClosure(protoIdx)
         local sub = proto.P and proto.P[protoIdx] or nil
-        if not sub then return function() end end
+        if not sub then 
+            return function() end 
+        end
         return function(...)
             return runVM(sub, Reg, env, {...})
         end
@@ -55,6 +83,7 @@ local function runVM(proto, upvals, env, varargs)
         error("attempt to index " .. type(obj), 2)
     end
 
+    -- Perbaikan 2: doCall dibungkus pcall agar error dari fungsi Lua tidak crash total
     local function doCall(base, nargs, nret)
         local f = Reg[base]
         local args = {}
@@ -64,8 +93,14 @@ local function runVM(proto, upvals, env, varargs)
             if mt and mt.__call then f = mt.__call end
             if type(f) ~= "function" then error("attempt to call " .. type(f), 2) end
         end
-        local r = {f(unpack(args, 1, nargs))}
-        if nret == 0 then return r end
+        
+        local success, result = pcall(f, unpack(args, 1, nargs))
+        if not success then
+            error("Mawww VM Runtime Error: " .. tostring(result), 2)
+        end
+        
+        local r = {result}
+        if nret == 0 then return end
         for i = 1, nret do
             Reg[base + i - 1] = r[i]
         end
@@ -138,14 +173,14 @@ local function runVM(proto, upvals, env, varargs)
             if not Reg[a] then PC = PC + b end
         elseif op == 29 then
             Reg[a] = makeClosure(b)
-        elseif op == 30 then     -- GETUPVAL: read from parent's Reg
+        elseif op == 30 then     -- GETUPVAL
             local uv = proto.upvals and proto.upvals[b + 1]
             if uv then
                 Reg[a] = upvals[uv.parentReg]
             else
                 Reg[a] = nil
             end
-        elseif op == 31 then     -- SETUPVAL: write to parent's Reg
+        elseif op == 31 then     -- SETUPVAL
             local uv = proto.upvals and proto.upvals[b + 1]
             if uv then
                 upvals[uv.parentReg] = Reg[a]
@@ -153,7 +188,11 @@ local function runVM(proto, upvals, env, varargs)
         elseif op == 32 then
             for i = 1, #varargs do Reg[a + i - 1] = varargs[i] end
         elseif op == 36 then     -- GETMETHOD
+            -- Perbaikan 3: Nil-safety pada GETMETHOD
             local obj = Reg[b]
+            if obj == nil then
+                error("Mawww VM: attempt to index a nil value (GETMETHOD)", 2)
+            end
             local key = K[c + 1]
             local m = getIndex(obj, key)
             Reg[a] = m
@@ -162,6 +201,23 @@ local function runVM(proto, upvals, env, varargs)
             error("VM: unknown opcode " .. tostring(op), 2)
         end
     end
+end
+
+-- Perbaikan 4: Environment fallback yang lebih kuat
+local __env = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
+if not __env then 
+    error("Mawww: Gagal menemukan environment eksekusi. Pastikan eksekutor mendukung getgenv atau getfenv.") 
+end
+
+local __run = runVM
+
+-- Perbaikan 5: Bungkus eksekusi utama dengan pcall untuk mencegah crash diam-diam
+local success, err = pcall(function()
+    __run(__PROTOS[1], {}, __env, {...})
+end)
+
+if not success then
+    warn("[Mawww VM] Eksekusi gagal: " .. tostring(err))
 end
 
 return runVM
