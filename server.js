@@ -87,12 +87,17 @@ function serializeProto(proto, key) {
 
     const instLines = proto.insts.map(i => `{${i.join(',')}}`).join(',');
 
+    // Serialize upvals: [{parentReg: 0}, ...] → {{parentReg = 0}, ...}
+    const upvalsLua = (proto.upvals || [])
+        .map(u => `{parentReg = ${u.parentReg}}`)
+        .join(', ');
+
     return `{
         K = {${Klines}},
         insts = {${instLines}},
         numParams = ${proto.numParams},
         isVararg = ${proto.isVararg ? 'true' : 'false'},
-        upvals = {}
+        upvals = {${upvalsLua}}
     }`;
 }
 
@@ -100,7 +105,7 @@ function serializeProto(proto, key) {
 function buildLuaOutput(compiled, key) {
     const protosLua = compiled.protos.map(p => serializeProto(p, key));
 
-    // BACA vm.lua dan STRIP `return runVM` di akhir
+    // Baca vm.lua lalu STRIP `return runVM` supaya tidak menghentikan chunk
     let vmRuntime = fs.readFileSync(path.join(__dirname, 'engine', 'vm.lua'), 'utf8');
     vmRuntime = vmRuntime.replace(/^\s*return\s+runVM\s*;?\s*$/m, '');
 
@@ -159,13 +164,19 @@ app.post('/api/fetch-raw', async (req, res) => {
         return res.status(400).json({ error: 'Invalid URL.' });
     }
 
+    // SSRF Protection
     try {
         const parsed = new URL(url);
         const host = parsed.hostname.toLowerCase();
         if (
-            host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1' ||
-            /^10\./.test(host) || /^192\.168\./.test(host) ||
-            /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host)
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host === '0.0.0.0' ||
+            host === '::1' ||
+            /^10\./.test(host) ||
+            /^192\.168\./.test(host) ||
+            /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+            /^169\.254\./.test(host)
         ) {
             return res.status(400).json({ error: 'URL tidak diizinkan.' });
         }
@@ -174,7 +185,10 @@ app.post('/api/fetch-raw', async (req, res) => {
     }
 
     const fetchOnce = (targetUrl, redirectCount = 0) => new Promise((resolve, reject) => {
-        if (redirectCount > 3) { reject(new Error('Too many redirects')); return; }
+        if (redirectCount > 3) {
+            reject(new Error('Too many redirects'));
+            return;
+        }
         const client = targetUrl.startsWith('https') ? https : http;
         const reqFetch = client.get(targetUrl, {
             timeout: FETCH_TIMEOUT_MS,
@@ -185,18 +199,28 @@ app.post('/api/fetch-raw', async (req, res) => {
                 fetchOnce(next, redirectCount + 1).then(resolve).catch(reject);
                 return;
             }
-            if (r.statusCode !== 200) { reject(new Error('HTTP ' + r.statusCode)); return; }
+            if (r.statusCode !== 200) {
+                reject(new Error('HTTP ' + r.statusCode));
+                return;
+            }
             let d = '';
             let size = 0;
             r.on('data', c => {
                 size += c.length;
-                if (size > MAX_INPUT_BYTES) { reqFetch.destroy(); reject(new Error('File terlalu besar')); return; }
+                if (size > MAX_INPUT_BYTES) {
+                    reqFetch.destroy();
+                    reject(new Error('File terlalu besar'));
+                    return;
+                }
                 d += c;
             });
             r.on('end', () => resolve(d));
         });
         reqFetch.on('error', reject);
-        reqFetch.on('timeout', () => { reqFetch.destroy(); reject(new Error('Timeout')); });
+        reqFetch.on('timeout', () => {
+            reqFetch.destroy();
+            reject(new Error('Timeout'));
+        });
     });
 
     try {
@@ -243,7 +267,11 @@ app.post('/api/obfuscate', async (req, res) => {
 
 // ---------- API: STATUS ----------
 app.get('/api/status', (req, res) => {
-    res.json({ pending: queue.pending, size: queue.size, concurrency: queue.concurrency });
+    res.json({
+        pending: queue.pending,
+        size: queue.size,
+        concurrency: queue.concurrency
+    });
 });
 
 // ---------- START ----------
