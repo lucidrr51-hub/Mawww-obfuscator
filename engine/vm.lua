@@ -7,7 +7,6 @@ do
     local _rawget, _pcall, _type = rawget, pcall, type
     if _type(_rawget) ~= "function" or _type(_pcall) ~= "function" then return end
     
-    -- Pengecekan loadstring yang aman
     if islclosure and loadstring and _type(loadstring) == "function" and islclosure(loadstring) then return end
     
     local bad = {"ScriptDumper","ConstantDumper","BytecodeDumper","LuauDumper","SimpleSpy","DarkDex","Hydroxide","TurtleSpy"}
@@ -43,7 +42,6 @@ local function runVM(proto, upvals, env, varargs)
 
     varargs = varargs or {}
 
-    -- Perbaikan: Guard pada makeClosure
     local function makeClosure(protoIdx)
         local sub = proto.P and proto.P[protoIdx] or nil
         if not sub then 
@@ -84,7 +82,6 @@ local function runVM(proto, upvals, env, varargs)
         error("attempt to index " .. type(obj), 2)
     end
 
-    -- Perbaikan: doCall dengan pcall dan traceback
     local function doCall(base, nargs, nret)
         local f = Reg[base]
         local args = {}
@@ -189,7 +186,6 @@ local function runVM(proto, upvals, env, varargs)
         elseif op == 32 then
             for i = 1, #varargs do Reg[a + i - 1] = varargs[i] end
         elseif op == 36 then     -- GETMETHOD
-            -- Perbaikan: Nil-safety pada GETMETHOD
             local obj = Reg[b]
             if obj == nil then
                 error("Mawww VM: attempt to index a nil value (GETMETHOD)", 2)
@@ -204,7 +200,7 @@ local function runVM(proto, upvals, env, varargs)
     end
 end
 
--- Perbaikan: Environment fallback berlapis
+-- Environment fallback berlapis
 local __env = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
 if not __env then 
     error("Mawww: Gagal menemukan environment eksekusi. Pastikan eksekutor mendukung getgenv atau getfenv.") 
@@ -212,7 +208,6 @@ end
 
 local __run = runVM
 
--- Perbaikan: Bungkus eksekusi utama dengan pcall
 local success, err = pcall(function()
     __run(__PROTOS[1], {}, __env, {...})
 end)
