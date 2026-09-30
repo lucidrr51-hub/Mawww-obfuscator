@@ -1,143 +1,88 @@
-const $ = (id) => document.getElementById(id);
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { compile } = require('./engine/compiler');
 
-let lastOutput = '';
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-// ---------- Fetch dari raw URL ----------
-async function loadFromUrl() {
-    const url = $('rawUrl').value.trim();
-    if (!url) {
-        $('status').textContent = 'Masukkan raw URL dulu.';
-        return;
-    }
-    if (!/^https?:\/\//i.test(url)) {
-        $('status').textContent = 'URL harus diawali http:// atau https://';
-        return;
-    }
+// Konfigurasi Multer untuk menerima file upload
+const upload = multer({ storage: multer.memoryStorage() });
 
-    $('status').textContent = 'Fetching ' + url + ' ...';
-    try {
-        const res = await fetch('/api/fetch-raw', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-            $('status').textContent = 'Fetch gagal: ' + (data.error || 'unknown');
-            return;
-        }
-        $('input').value = data.code;
-        $('status').textContent = `Berhasil load ${data.code.length} bytes dari URL.`;
-    } catch (err) {
-        $('status').textContent = 'Fetch error: ' + err.message;
-    }
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Fungsi untuk membangun output Lua akhir
+function buildLuaOutput(protos, key) {
+    const vmRuntimePath = path.join(__dirname, 'engine', 'vm.lua');
+    
+    // Baca file vm.lua
+    let vmRuntime = fs.readFileSync(vmRuntimePath, 'utf8');
+
+    // PENTING: JANGAN HAPUS `return runVM` DARI vm.lua!
+    // Kode lama Anda menghapus baris ini, yang menyebabkan VM tidak pernah berjalan.
+    // Kita biarkan vm.lua apa adanya.
+
+    const bytecode = `-- Mawww VM Bytecode (Build Key: ${key.toString(16)})
+local __KEY = ${key}
+local function __xor_str(s, k)
+    local out = {}
+    for i = 1, #s do
+        out[i] = string.char((string.byte(s, i) ~ ((k + (i - 1) * 3) % 256)) % 256)
+    end
+    return table.concat(out)
+end
+local __PROTOS = ${JSON.stringify(protos, null, 4)}
+local function __decrypt_k(p)
+    for i = 1, #p.K do
+        if type(p.K[i]) == "string" then
+            p.K[i] = __xor_str(p.K[i], __KEY)
+        end
+    end
+end
+for _, p in ipairs(__PROTOS) do __decrypt_k(p) end
+for i = 1, #__PROTOS do __PROTOS[i].P = __PROTOS end
+`;
+
+    // Fallback environment yang kuat untuk Delta dan eksekutor lainnya
+    const runner = `
+local __env = (getgenv and getgenv()) or (getfenv and getfenv(0)) or _G
+local __run = runVM
+__run(__PROTOS[1], {}, __env, {...})
+`;
+
+    return `-- Mawww Obfuscated Script\n${vmRuntime}\n${bytecode}\n${runner}`;
 }
 
-// ---------- Obfuscate ----------
-async function obfuscate() {
-    const code = $('input').value.trim();
-    const preset = $('preset')?.value || 'Strong';
-    const btn = $('obfBtn');
-    const out = $('output');
-
-    if (!code) {
-        out.value = 'ERROR: No code provided.';
-        return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Obfuscating...';
-    out.value = 'Processing on server...';
-
-    const startTime = Date.now();
-
+// Endpoint untuk obfuscate
+app.post('/obfuscate', upload.single('script'), (req, res) => {
     try {
-        const res = await fetch('/api/obfuscate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, preset })
-        });
-
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-            out.value = 'ERROR: ' + (data.error || 'Unknown error');
-            return;
+        if (!req.file) {
+            return res.status(400).json({ error: 'No script file uploaded.' });
         }
 
-        out.value = data.output;
-        lastOutput = data.output;
+        const luaCode = req.file.buffer.toString('utf8');
+        
+        // Compile Lua ke bytecode Mawww
+        const { protos, key } = compile(luaCode);
+        
+        // Bangun output akhir
+        const finalScript = buildLuaOutput(protos, key);
 
-        // Generate loadstring
-        generateLoadstring();
-
-        const ms = Date.now() - startTime;
-        $('status').textContent =
-            `Done in ${ms}ms • Build: ${data.buildId.slice(0, 8)} • Size: ${data.output.length} bytes`;
+        res.setHeader('Content-Type', 'text/plain');
+        res.send(finalScript);
     } catch (err) {
-        out.value = 'ERROR: ' + err.message;
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Obfuscate';
+        console.error('Compilation Error:', err);
+        res.status(500).json({ error: err.message });
     }
-}
+});
 
-// ---------- Loadstring generator ----------
-function generateLoadstring() {
-    const box = $('lsBox');
-    const ls = $('lsOutput');
-    const rawUrl = $('rawUrl').value.trim();
+// Endpoint untuk health check
+app.get('/', (req, res) => {
+    res.send('Mawww Obfuscator Server is running.');
+});
 
-    // Kalau user udah masukin raw URL, pakai itu. Kalau belum, pakai placeholder.
-    const url = rawUrl && /^https?:\/\//i.test(rawUrl) ? rawUrl : 'YOUR_RAW_URL_HERE';
-
-    const snippet =
-`loadstring(game:HttpGet("${url}"))()`;
-
-    ls.value = snippet;
-    box.classList.add('visible');
-}
-
-// ---------- Copy / Download ----------
-function copyOutput() {
-    const out = $('output');
-    out.select();
-    document.execCommand('copy');
-    $('status').textContent = 'Output copied to clipboard.';
-}
-
-function copyLoadstring() {
-    const ls = $('lsOutput');
-    ls.select();
-    document.execCommand('copy');
-    $('status').textContent = 'Loadstring copied to clipboard.';
-}
-
-function downloadOutput() {
-    const out = $('output').value;
-    if (!out) return;
-    const blob = new Blob([out], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `mawww_${Date.now()}.lua`;
-    a.click();
-    URL.revokeObjectURL(url);
-}
-
-function uploadFile(ev) {
-    const file = ev.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => { $('input').value = e.target.result; };
-    reader.readAsText(file);
-}
-
-// ---------- Wire buttons ----------
-document.addEventListener('DOMContentLoaded', () => {
-    $('fetchBtn')?.addEventListener('click', loadFromUrl);
-    $('obfBtn')?.addEventListener('click', obfuscate);
-    $('copyBtn')?.addEventListener('click', copyOutput);
-    $('copyLsBtn')?.addEventListener('click', copyLoadstring);
-    $('dlBtn')?.addEventListener('click', downloadOutput);
-    $('fileInput')?.addEventListener('change', uploadFile);
+app.listen(PORT, () => {
+    console.log(`Mawww Server berjalan di http://localhost:${PORT}`);
 });
