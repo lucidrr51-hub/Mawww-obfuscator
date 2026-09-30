@@ -34,12 +34,12 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // ============================================================
-//  ULTRA OBFUSCATOR v14.0 — Stable Custom VM
+//  ULTRA OBFUSCATOR v15.0 — Stable Custom VM
 //  - Custom VM dengan random opcodes (unik per obfuscate)
-//  - Enkripsi bytecode: XOR reversibel + verifikasi ketat
+//  - Enkripsi bytecode: XOR reversibel + verifikasi magic byte
 //  - Decoy arrays & dead code
 //  - Anti-debug timing check (aman untuk Delta)
-//  - Magic Byte untuk verifikasi dekripsi di VM
+//  - Kompatibel: Delta, Synapse, Krnl, Fluxus, Solara, Xeno
 // ============================================================
 
 function makeNameGenerator() {
@@ -141,7 +141,7 @@ function obfuscate(source) {
     const keyStr = key.join(',');
     const bytecodeStr = encryptedBytecode.join(',');
 
-    const lua = `-- Mawww Obfuscator v14.0 | Stable Custom VM
+    const lua = `-- Mawww Obfuscator v15.0 | Stable Custom VM
 -- Generated: ${new Date().toISOString()}
 -- DO NOT EDIT
 
@@ -357,5 +357,5 @@ app.get('*', (req, res) => {
 
 // ===== Listen =====
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Mawww Obfuscator v14.0 (Stable VM) running on 0.0.0.0:${PORT}`);
+    console.log(`🚀 Mawww Obfuscator v15.0 (Stable VM) running on 0.0.0.0:${PORT}`);
 });
